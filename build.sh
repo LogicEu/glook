@@ -1,19 +1,28 @@
 #!/bin/bash
 
-app='glsl_visualizer'
-dir=../../../
+comp=gcc
+exe=glook
+
+std=(
+    -std=c99
+    -Wall
+    -Wextra
+    -O2
+)
+
+inc=(
+    -Iglee/
+)
+
 lib=(
-   '-I'$dir'src/'
-   '-I'$dir'include/GLFW/'
-   '-L'$dir'lib/'
-    -lcore
+    -Llib/
+    -lglee
     -lglfw
-    -lzbug
 )
 
 mac=(
     -framework OpenGL
-    -mmacos-version-min=10.9
+    # -mmacos-version-min=10.9
 )
 
 linux=(
@@ -21,44 +30,56 @@ linux=(
     -lGLEW
 )
 
-comp() {
+build() {
+    mkdir lib/
+    pushd glee/
+    ./build.sh -s
+    popd
+    mv glee/libglee.a lib/libglee.a
+}
+
+clean() {
+    rm -r lib/
+}
+
+compile() {
     if echo "$OSTYPE" | grep -q "linux"; then
-        gcc -std=c99 -Wall -O2 ${lib[*]} ${linux[*]} *.c -o $dir'bin/'$app
+        $comp ${std[*]} ${inc[*]} ${lib[*]} ${linux[*]} *.c -o $exe
     elif echo "$OSTYPE" | grep -q "darwin"; then 
-        gcc -std=c99 -Wall -O2 ${lib[*]} ${mac[*]} *.c -o $dir'bin/'$app
+        $comp ${std[*]} ${inc[*]} ${lib[*]} ${mac[*]} *.c -o $exe
     else
         echo "OS is not supported yet..."
         exit
     fi
 }
 
-exe() {
-    cd $dir
-    ./shell.sh exe $app "$@"
+install() {
+    sudo mv $exe /usr/local/bin/$exe
 }
 
 run() {
-    comp
-    exe "$@"
+    compile
+    ./$exe "$@"
 }
 
-if (($# >= 1))
-then
-    if [[ "$1" == "run" ]]
-    then
-        shift
-        run "$@"
-        exit
-    elif [[ "$1" == "comp" ]]
-    then
-        comp
-        exit
-    elif [[ "$1" == "exe" ]]
-    then
-        shift
-        exe "$@"
-        exit
-    fi
-fi
+fail() {
+    echo "Use with '-build' to build dependencies, '-comp' to compile the tool"
+    exit
+}
 
-echo "Use 'comp' to compile, 'exe' to execute or 'run' to do both."
+if [[ $# < 1 ]]; then
+    fail
+elif [[ "$1" == "-run" ]]; then
+    shift
+    run "$@"
+elif [[ "$1" == "-comp" ]]; then
+    compile
+elif [[ "$1" == "-build" ]]; then
+    build
+elif [[ "$1" == "-clean" ]]; then
+    clean
+elif [[ "$1" == "-install" ]]; then
+    install
+else
+    fail
+fi

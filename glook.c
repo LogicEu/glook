@@ -1,7 +1,13 @@
+#include <glee.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <glee.h>
+
+/*
+===================================================
+>>>>>>>>>  GLOOK GLSL SHADER VISUALIZER   >>>>>>>>>
+=========================================  @eulogic
+*/
 
 #ifdef __APPLE__
 static const char* glsl_version = "#version 330 core\n\n";
@@ -9,42 +15,42 @@ static const char* glsl_version = "#version 330 core\n\n";
 static const char* glsl_version = "#version 300 es\nprecision mediump float;\n\n";
 #endif
 
-static const char* glsl_quad_shader = "layout (location = 0) in vec2 vertCoord;\nout vec2 fragCoord;\nvoid main()\n{\nfragCoord = vertCoord;\ngl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);}\n";
-static const char* glsl_template = "out vec4 FragColor;\n\nuniform float u_time;\nuniform vec2 u_resolution;\nuniform vec2 u_mouse;\n\nvoid main() \n{\n\tvec2 uv = gl_FragCoord.xy / u_resolution.y;\n\tvec3 color = vec3(uv.x, uv.y, cos(u_time));\n\tFragColor = vec4(color, 1.0);\n}\n";
+static const char* glook_quad_shader = "layout (location = 0) in vec2 vertCoord;\nout vec2 fragCoord;\nvoid main()\n{\nfragCoord = vertCoord;\ngl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);}\n";
+static const char* glook_template = "out vec4 FragColor;\n\nuniform float u_time;\nuniform vec2 u_resolution;\nuniform vec2 u_mouse;\n\nvoid main() \n{\n\tvec2 uv = gl_FragCoord.xy / u_resolution.y;\n\tvec3 color = vec3(uv.x, uv.y, cos(u_time));\n\tFragColor = vec4(color, 1.0);\n}\n";
 
-void glsl_write_shader()
+static void glook_shader_write()
 {
     FILE* file = fopen("template.frag", "w");
     if (!file) {
         printf("Could not write file 'template.frag'\n");
         return;
     }
-    fprintf(file, "%s", glsl_template);
+    fprintf(file, "%s", glook_template);
     fclose(file);
     printf("Template shader 'template.frag' created succesfully\n");
 }
 
-unsigned int glsl_shader_load(const char* fpath)
+static unsigned int glook_shader_load(const char* fpath)
 {
     unsigned int shader = glCreateProgram();
-    char* fb = shader_read_file(fpath);
+    char* fb = glee_shader_file_read(fpath);
     if (!fb) {
         printf("There was an error loading shader '%s'\n", fpath);
         return 0;
     }
 
-    size_t size = strlen(glsl_version) + strlen(glsl_quad_shader);
+    size_t size = strlen(glsl_version) + strlen(glook_quad_shader);
     char* glsl_vert = (char*)malloc(size + 1);
     strcpy(glsl_vert, glsl_version);
-    strcat(glsl_vert, glsl_quad_shader);
+    strcat(glsl_vert, glook_quad_shader);
     glsl_vert[size] = '\0';
 
     unsigned int vertex_shader = glCreateShader(GL_VERTEX_SHADER);
     unsigned int fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
 
-    shader_compile(glsl_vert, vertex_shader);
-    shader_compile(fb, fragment_shader);
-    shader_link(shader, vertex_shader, fragment_shader);
+    glee_shader_compile(glsl_vert, vertex_shader);
+    glee_shader_compile(fb, fragment_shader);
+    glee_shader_link(shader, vertex_shader, fragment_shader);
     glUseProgram(shader);
 
     free(fb);
@@ -54,7 +60,7 @@ unsigned int glsl_shader_load(const char* fpath)
 
 int main(int argc, char** argv)
 {   
-    if (argc == 1) {
+    if (argc < 2) {
         printf("Missing input shader. See -help for more information.\n");
         return 0;
     }
@@ -74,7 +80,7 @@ int main(int argc, char** argv)
             printf("Use '&' as last argument to run in the background.\n\n");
             return 0;
         } else if (!strcmp(argv[i], "-template")) {
-            glsl_write_shader();
+            glook_shader_write();
             return 0;
         } else if (!strcmp(argv[i], "-w")) {
             if (i + 1 >= argc) {
@@ -120,11 +126,11 @@ int main(int argc, char** argv)
         return 0;
     } 
 
-    coreInit();
-    window_create(window_title, w, h, f, 0);
-    if (x != 0 || y != 0) window_set_position(x, y);
-    unsigned int quad = vertex_array_buffer_quad_create();
-    unsigned int shader = glsl_shader_load(fragment_shader_path);
+    glee_init();
+    glee_window_create(window_title, w, h, f, 0);
+    if (x != 0 || y != 0) glee_window_set_position(x, y);
+    glee_buffer_quad_create();
+    unsigned int shader = glook_shader_load(fragment_shader_path);
     if (!shader) return 0;
 
     float width = (float)w, height = (float)h;
@@ -134,13 +140,14 @@ int main(int argc, char** argv)
 #endif
     glUniform2f(glGetUniformLocation(shader, "u_resolution"), width, height);
 
-    double mouse_x, mouse_y;
-    while (window_is_open()) {
-        screen_clear();
-        glfwGetCursorPos(window_get(), &mouse_x, &mouse_y);
-        if (keyboard_pressed(GLFW_KEY_ESCAPE)) break;
-        if (keyboard_pressed(GLFW_KEY_R)) {
-            unsigned int new_shader = glsl_shader_load(fragment_shader_path);
+    float mouse_x, mouse_y;
+    while (glee_window_is_open()) {
+        glee_screen_clear();
+        glee_mouse_pos_3d(&mouse_x, &mouse_y);
+
+        if (glee_key_pressed(GLFW_KEY_ESCAPE)) break;
+        if (glee_key_pressed(GLFW_KEY_R)) {
+            unsigned int new_shader = glook_shader_load(fragment_shader_path);
             if (new_shader) {
                 glDeleteProgram(shader);
                 shader = new_shader;
@@ -151,8 +158,8 @@ int main(int argc, char** argv)
         glUniform1f(glGetUniformLocation(shader, "u_time"), (float)glfwGetTime());
         glUniform2f(glGetUniformLocation(shader, "u_mouse"), (float)mouse_x, (float)mouse_y);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        screen_refresh();
+        glee_screen_refresh();
     }
-    coreExit();
+    glee_deinit();
     return 0;
 }
