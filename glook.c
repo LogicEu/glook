@@ -143,7 +143,7 @@ int main(int argc, char** argv)
     float mouse_x, mouse_y;
     while (glee_window_is_open()) {
         glee_screen_clear();
-        glee_mouse_pos_3d(&mouse_x, &mouse_y);
+        glee_mouse_pos(&mouse_x, &mouse_y);
 
         if (glee_key_pressed(GLFW_KEY_ESCAPE)) break;
         if (glee_key_pressed(GLFW_KEY_R)) {
