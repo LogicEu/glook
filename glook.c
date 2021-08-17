@@ -67,11 +67,11 @@ int main(int argc, char** argv)
 
     unsigned int w = 400, h = 300, x = 0, y = 0, f = 0;
     char fragment_shader_path[256] = "$";
-    char window_title[256] = "GLSL Shader Visualizer";
+    char window_title[256] = "glook";
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-help")) {
-            printf(" ================ GLSL Shader Visualizer ================= \n");
+            printf(" ============= glook GLSL shader visualizer ============== \n");
             printf("\nEnter your input fragment shader '$ glsl file_path.frag'.\n");
             printf("Use -w and -h to set the width and height of the visualizer.\n");
             printf("Set the window position with -x and -y.\n");
