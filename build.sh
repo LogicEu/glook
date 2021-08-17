@@ -44,9 +44,9 @@ clean() {
 
 compile() {
     if echo "$OSTYPE" | grep -q "linux"; then
-        $comp ${std[*]} ${inc[*]} ${lib[*]} ${linux[*]} *.c -o $exe
+        $comp *.c -o $exe ${std[*]} ${inc[*]} ${lib[*]} ${linux[*]} 
     elif echo "$OSTYPE" | grep -q "darwin"; then 
-        $comp ${std[*]} ${inc[*]} ${lib[*]} ${mac[*]} *.c -o $exe
+        $comp *.c -o $exe ${std[*]} ${inc[*]} ${lib[*]} ${mac[*]}
     else
         echo "OS is not supported yet..."
         exit
