@@ -38,7 +38,7 @@ $(LDIR)%.a: %
 	cd $^ && make && mv $@ ../
 
 clean:
-	rm -r $(LDIR) && rm $(NAME)
+	rm -r $(LDIR)
 	
 install: $(NAME)
-	sudo cp $^ /usr/local/bin/
+	sudo mv $^ /usr/local/bin/

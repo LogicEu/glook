@@ -9,6 +9,8 @@
 =========================================  @eulogic
 */
 
+#define BUFF_SIZE 1024
+
 #ifdef __APPLE__
 static const char* glsl_version = "#version 330 core\n\n";
 #else
@@ -20,14 +22,15 @@ static const char* glook_template = "out vec4 FragColor;\n\nuniform float u_time
 
 static void glook_shader_write()
 {
-    FILE* file = fopen("template.frag", "w");
+    const char* template = "template.glsl";
+    FILE* file = fopen(template, "w");
     if (!file) {
-        printf("Could not write file 'template.frag'\n");
+        printf("glook could not write file '%s'\n", template);
         return;
     }
     fprintf(file, "%s", glook_template);
     fclose(file);
-    printf("Template shader 'template.frag' created succesfully\n");
+    printf("glook writed shader '%s' created succesfully\n", template);
 }
 
 static unsigned int glook_shader_load(const char* fpath)
@@ -35,7 +38,7 @@ static unsigned int glook_shader_load(const char* fpath)
     unsigned int shader = glCreateProgram();
     char* fb = glee_shader_file_read(fpath);
     if (!fb) {
-        printf("There was an error loading shader '%s'\n", fpath);
+        printf("glook had a problem loading shader '%s'\n", fpath);
         return 0;
     }
 
@@ -62,12 +65,12 @@ int main(int argc, char** argv)
 {   
     if (argc < 2) {
         printf("Missing input shader. See -help for more information.\n");
-        return 0;
+        return EXIT_FAILURE;
     }
 
     unsigned int w = 400, h = 300, x = 0, y = 0, f = 0;
-    char fragment_shader_path[256] = "$";
-    char window_title[256] = "glook";
+    char fragment_shader_path[BUFF_SIZE] = "$";
+    char window_title[BUFF_SIZE] = "glook";
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-help")) {
@@ -78,42 +81,42 @@ int main(int argc, char** argv)
             printf("Use the -f flag for fullscreen and -t to set a title.\n");
             printf("You can start off with a standard template using -template.\n");
             printf("Use '&' as last argument to run in the background.\n\n");
-            return 0;
+            return EXIT_SUCCESS;
         } else if (!strcmp(argv[i], "-template")) {
             glook_shader_write();
-            return 0;
+            return EXIT_SUCCESS;
         } else if (!strcmp(argv[i], "-w")) {
             if (i + 1 >= argc) {
                 printf("Missing value for -w.\n");
-                return 0;
+                return EXIT_FAILURE;
             }
             w = atoi(argv[i + 1]);
             i++;
         } else if (!strcmp(argv[i], "-h")) {
             if (i + 1 >= argc) {
                 printf("Missing value for -h.\n");
-                return 0;
+                return EXIT_FAILURE;
             }
             h = atoi(argv[i + 1]);
             i++;
         } else if (!strcmp(argv[i], "-x")) {
             if (i + 1 >= argc) {
                 printf("Missing value for -x.\n");
-                return 0;
+                return EXIT_FAILURE;
             }
             x = atoi(argv[i + 1]);
             i++;
         } else if (!strcmp(argv[i], "-y")) {
             if (i + 1 >= argc) {
                 printf("Missing value for -y.\n");
-                return 0;
+                return EXIT_FAILURE;
             } 
             y = atoi(argv[i + 1]);
             i++;
         } else if (!strcmp(argv[i], "-t")) {
             if (i + 1 >= argc) {
                 printf("Missing value for -t.\n");
-                return 0;
+                return EXIT_FAILURE;
             }
             strcpy(window_title, argv[i + 1]);
             i++;
@@ -122,8 +125,8 @@ int main(int argc, char** argv)
     }
 
     if (!strcmp(fragment_shader_path, "$")) {
-        printf("No input fragment shader was provided\n");
-        return 0;
+        printf("Missing input shader. See -help for more information.\n");
+        return EXIT_FAILURE;
     } 
 
     glee_init();
@@ -131,7 +134,7 @@ int main(int argc, char** argv)
     if (x != 0 || y != 0) glee_window_set_position(x, y);
     glee_buffer_quad_create();
     unsigned int shader = glook_shader_load(fragment_shader_path);
-    if (!shader) return 0;
+    if (!shader) return EXIT_FAILURE;
 
     float width = (float)w, height = (float)h;
 #ifdef __APPLE__
@@ -161,5 +164,5 @@ int main(int argc, char** argv)
         glee_screen_refresh();
     }
     glee_deinit();
-    return 0;
+    return EXIT_SUCCESS;
 }
