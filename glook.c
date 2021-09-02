@@ -143,10 +143,11 @@ int main(int argc, char** argv)
 #endif
     glUniform2f(glGetUniformLocation(shader, "u_resolution"), width, height);
 
-    float mouse_x, mouse_y;
+    float mouse_x, mouse_y, time_current, time_start = (float)glfwGetTime();
     while (glee_window_is_open()) {
         glee_screen_clear();
         glee_mouse_pos(&mouse_x, &mouse_y);
+        time_current = (float)glfwGetTime() - time_start;
 
         if (glee_key_pressed(GLFW_KEY_ESCAPE)) break;
         if (glee_key_pressed(GLFW_KEY_R)) {
@@ -155,10 +156,11 @@ int main(int argc, char** argv)
                 glDeleteProgram(shader);
                 shader = new_shader;
                 glUseProgram(shader);
+                time_start = time_current;
                 glUniform2f(glGetUniformLocation(shader, "u_resolution"), (float)w * 2.0, (float)h * 2.0f);
             }
         }
-        glUniform1f(glGetUniformLocation(shader, "u_time"), (float)glfwGetTime());
+        glUniform1f(glGetUniformLocation(shader, "u_time"), time_current);
         glUniform2f(glGetUniformLocation(shader, "u_mouse"), (float)mouse_x, (float)mouse_y);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         glee_screen_refresh();
