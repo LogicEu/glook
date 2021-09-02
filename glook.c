@@ -167,7 +167,7 @@ int main(int argc, char** argv)
             }
         }
         glee_shader_uniform_set(shader, 1, "u_time", &time_current);
-        glee_shader_uniform_set(shader, 2, "u_mouse", &mouse);
+        glee_shader_uniform_set(shader, 2, "u_mouse", &mouse[0]);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         glee_screen_refresh();
     }
