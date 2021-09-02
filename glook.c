@@ -30,7 +30,7 @@ static void glook_shader_write()
     }
     fprintf(file, "%s", glook_template);
     fclose(file);
-    printf("glook writed shader '%s' created succesfully\n", template);
+    printf("glook succesfully created GLSL shader file '%s'\n", template);
 }
 
 static unsigned int glook_shader_load(const char* fpath)
@@ -59,6 +59,17 @@ static unsigned int glook_shader_load(const char* fpath)
     free(fb);
     free(glsl_vert);
     return shader;
+}
+
+void glook_resolution_set(unsigned int shader)
+{
+    int w, h, frame_size = 1;
+#ifdef __APPLE__
+    frame_size *= 2;
+#endif
+    glee_window_get_size(&w, &h);
+    float res[] = {(float)(w * frame_size), (float)(h * frame_size)};
+    glee_shader_uniform_set(shader, 2, "u_resolution", &res[0]);
 }
 
 int main(int argc, char** argv)
@@ -136,18 +147,13 @@ int main(int argc, char** argv)
     unsigned int shader = glook_shader_load(fragment_shader_path);
     if (!shader) return EXIT_FAILURE;
 
-    float width = (float)w, height = (float)h;
-#ifdef __APPLE__
-    width *= 2.0f;
-    height *= 2.0f;
-#endif
-    glUniform2f(glGetUniformLocation(shader, "u_resolution"), width, height);
-
-    float mouse_x, mouse_y, time_current, time_start = (float)glfwGetTime();
+    glook_resolution_set(shader);
+    float mouse[2], time_current, time_start = glee_time_get();
     while (glee_window_is_open()) {
         glee_screen_clear();
-        glee_mouse_pos(&mouse_x, &mouse_y);
-        time_current = (float)glfwGetTime() - time_start;
+
+        time_current = glee_time_get() - time_start;
+        glee_mouse_pos(&mouse[0], &mouse[1]);
 
         if (glee_key_pressed(GLFW_KEY_ESCAPE)) break;
         if (glee_key_pressed(GLFW_KEY_R)) {
@@ -157,11 +163,11 @@ int main(int argc, char** argv)
                 shader = new_shader;
                 glUseProgram(shader);
                 time_start = time_current;
-                glUniform2f(glGetUniformLocation(shader, "u_resolution"), (float)w * 2.0, (float)h * 2.0f);
+                glook_resolution_set(shader);
             }
         }
-        glUniform1f(glGetUniformLocation(shader, "u_time"), time_current);
-        glUniform2f(glGetUniformLocation(shader, "u_mouse"), (float)mouse_x, (float)mouse_y);
+        glee_shader_uniform_set(shader, 1, "u_time", &time_current);
+        glee_shader_uniform_set(shader, 2, "u_mouse", &mouse);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         glee_screen_refresh();
     }
