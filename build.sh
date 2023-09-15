@@ -1,29 +1,24 @@
 #!/bin/bash
 
-src=*.c
-cc=gcc
-exe=glook
+name=glook
+src=$name.c
 
-std=(
-    -std=c99
+cc=gcc
+std=-std=c89
+opt=-O2
+
+wflags=(
     -Wall
     -Wextra
-    -O2
+    -pedantic
 )
 
-inc=(
-    -Iglee/
-)
-
-lib=(
-    -Llib/
-    -lglee
+libs=(
     -lglfw
 )
 
 mac=(
     -framework OpenGL
-    # -mmacos-version-min=10.9
 )
 
 linux=(
@@ -31,46 +26,30 @@ linux=(
     -lGLEW
 )
 
-build() {
-    mkdir lib
-    pushd glee/ &&./build.sh -s && popd && mv glee/libglee.a lib/libglee.a
+if echo "$OSTYPE" | grep -q "linux"; then
+    libs+=(-lGL -lGLEW)
+elif echo "$OSTYPE" | grep -q "darwin"; then 
+    libs+=(-framework OpenGL)
+fi
+
+cmd() {
+    echo "$@" && $@
 }
 
 clean() {
-    rm -r lib/
+    [ -f $name ] && cmd rm -f $name
 }
 
 compile() {
-    if echo "$OSTYPE" | grep -q "linux"; then
-        $cc $src -o $exe ${std[*]} ${inc[*]} ${lib[*]} ${linux[*]} 
-    elif echo "$OSTYPE" | grep -q "darwin"; then 
-        $cc $src -o $exe ${std[*]} ${inc[*]} ${lib[*]} ${mac[*]}
-    else
-        echo "OS is not supported yet..." && exit
-    fi
+    cmd $cc $src -o $name $std $opt ${wflags[*]} ${libs[*]}
 }
 
-install() {
-    sudo mv $exe /usr/local/bin/$exe
-}
-
-fail() {
-    echo "Use with '-build' to build dependencies, '-comp' to compile the tool"
-    exit
-}
+(( $# < 1 )) && compile && exit
 
 case "$1" in
-    "-run")
-        shift
-        compile && ./$exe "$@";;
-    "-comp")
-        compile;;
-    "-build")
-        build;;
     "-clean")
         clean;;
-    "-install")
-        install;;
     *)
-        fail;;
+        echo "$0: unknown option: $1";;
 esac
+

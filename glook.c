@@ -1,176 +1,453 @@
-#include <glee.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/*
-===================================================
->>>>>>>>>  GLOOK GLSL SHADER VISUALIZER   >>>>>>>>>
-=========================================  @eulogic
-*/
-
-#define BUFF_SIZE 1024
-
-#ifdef __APPLE__
-static const char* glsl_version = "#version 330 core\n\n";
+#ifndef __APPLE__
+    #define GLOOK_SCALE 1
+    #define GLOOK_GLSL_VERSION "#version 300 es\nprecision mediump float;\n\n"
+    #include <GL/glew.h>
 #else
-static const char* glsl_version = "#version 300 es\nprecision mediump float;\n\n";
+    #define GLOOK_SCALE 1
+    #define GLOOK_GLSL_VERSION "#version 330 core\n\n"
+    #define GL_SILENCE_DEPRECATION
+    #define GLFW_INCLUDE_GLCOREARB
 #endif
 
-static const char* glook_quad_shader = "layout (location = 0) in vec2 vertCoord;\nout vec2 fragCoord;\nvoid main()\n{\nfragCoord = vertCoord;\ngl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);}\n";
-static const char* glook_template = "out vec4 FragColor;\n\nuniform float u_time;\nuniform vec2 u_resolution;\nuniform vec2 u_mouse;\n\nvoid main() \n{\n\tvec2 uv = gl_FragCoord.xy / u_resolution.y;\n\tvec3 color = vec3(uv.x, uv.y, cos(u_time));\n\tFragColor = vec4(color, 1.0);\n}\n";
+#include <GLFW/glfw3.h>
 
-static void glook_shader_write()
+#define BUFSIZE 1024
+#define LOGSIZE 512
+#define GLOOK_FILE_COUNT 1
+#define GLOOK_KEYBOARD_COUNT 1024
+
+static const char glook_shader_body[] = GLOOK_GLSL_VERSION
+"out vec4 _glookFragColor;\n\n"
+
+"uniform float iTime;\n"
+"uniform vec2 iResolution;\n"
+"uniform vec2 iMouse;\n\n"
+
+"void mainImage(out vec4, in vec2);\n\n"
+
+"void main(void)\n"
+"{\n"
+"    mainImage(_glookFragColor, gl_FragCoord.xy);\n"
+"}\n\n";
+
+static const char glook_shader_string_quad[] = GLOOK_GLSL_VERSION
+"layout (location = 0) in vec2 vertCoord;\n"
+
+"void main(void)\n"
+"{\n"
+"    gl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);\n"
+"}\n";
+
+static const char glook_shader_string_template[] = 
+"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+"{\n"
+"    vec2 uv = fragCoord / iResolution.xy;\n"
+"    vec3 color = vec3(uv.x, uv.y, (cos(iTime) + 1.0) * 0.5);\n"
+"    fragColor = vec4(color, 1.0);\n"
+"}\n";
+
+static struct glook {
+    GLFWwindow* window;
+    unsigned int width, height;
+    char* filepaths[GLOOK_FILE_COUNT];
+    char keys[GLOOK_KEYBOARD_COUNT];
+    char keys_pressed[GLOOK_KEYBOARD_COUNT];
+} glook = {NULL, 400, 300, {0}, {0}, {0}};
+
+static void glook_template_write(void)
 {
-    const char* template = "template.glsl";
-    FILE* file = fopen(template, "w");
+    static const char* filename = "template.glsl";
+    FILE* file = fopen(filename, "w");
     if (!file) {
-        printf("glook could not write file '%s'\n", template);
+        fprintf(stderr, "glook could not write file '%s'\n", filename);
         return;
     }
-    fprintf(file, "%s", glook_template);
+    
+    fprintf(file, "%s", glook_shader_string_template);
+    fprintf(stdout, "glook created shader file: %s\n", filename);
     fclose(file);
-    printf("glook succesfully created GLSL shader file '%s'\n", template);
+}
+
+static char* glook_file_read(const char* path)
+{
+    char* buffer;
+    size_t filelen;
+    FILE* file = fopen(path, "rb");
+    if (!file) {
+        fprintf(stderr, "glook could not open file '%s'\n", path);
+        return NULL;
+    }
+    
+    fseek(file, 0, SEEK_END);
+    filelen = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    buffer = (char*)malloc(filelen + sizeof(glook_shader_body)); 
+    memcpy(buffer, glook_shader_body, sizeof(glook_shader_body));
+    fread(buffer + sizeof(glook_shader_body) - 1, 1, filelen, file);
+    buffer[sizeof(glook_shader_body) + filelen - 1] = 0;
+    fclose(file);
+    return buffer;
+}
+
+static int glook_shader_compile(const GLchar* buffer, unsigned int shader)
+{
+    int success;
+    char infoLog[LOGSIZE];
+    glShaderSource(shader, 1, &buffer, NULL);
+    glCompileShader(shader);
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(shader, LOGSIZE, NULL, infoLog);
+        fprintf(stderr, "glook failed to compile shader\n%s", infoLog);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int glook_shader_link(
+    unsigned int shader, unsigned int vshader, unsigned int fshader)
+{
+    int success;
+    char infoLog[LOGSIZE];
+    glAttachShader(shader, vshader);
+    glAttachShader(shader, fshader);
+    glLinkProgram(shader);
+    glGetProgramiv(shader, GL_LINK_STATUS, &success);
+    if (!success) {
+        glGetProgramInfoLog(shader, LOGSIZE, NULL, infoLog);
+        fprintf(stderr, "glook failed to compile shader\n%s", infoLog);
+        return EXIT_FAILURE;
+    }
+
+    glDeleteShader(vshader);
+    glDeleteShader(fshader);
+    return EXIT_SUCCESS;
 }
 
 static unsigned int glook_shader_load(const char* fpath)
 {
-    unsigned int shader = glCreateProgram();
-    char* fb = glee_shader_file_read(fpath);
+    char* fb;
+    unsigned int vshader, fshader, shader = glCreateProgram();
+    fb = glook_file_read(fpath);
     if (!fb) {
-        printf("glook had a problem loading shader '%s'\n", fpath);
         return 0;
     }
 
-    size_t size = strlen(glsl_version) + strlen(glook_quad_shader);
-    char* glsl_vert = (char*)malloc(size + 1);
-    strcpy(glsl_vert, glsl_version);
-    strcat(glsl_vert, glook_quad_shader);
-    glsl_vert[size] = '\0';
+    vshader = glCreateShader(GL_VERTEX_SHADER);
+    fshader = glCreateShader(GL_FRAGMENT_SHADER);
+    glook_shader_compile(glook_shader_string_quad, vshader);
+    if (glook_shader_compile(fb, fshader)) {
+        free(fb);
+        return 0;
+    }
 
-    unsigned int vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-    unsigned int fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    if (glook_shader_link(shader, vshader, fshader)) {
+        free(fb);
+        return 0;
+    }
 
-    glee_shader_compile(glsl_vert, vertex_shader);
-    glee_shader_compile(fb, fragment_shader);
-    glee_shader_link(shader, vertex_shader, fragment_shader);
     glUseProgram(shader);
-
     free(fb);
-    free(glsl_vert);
     return shader;
 }
 
-void glook_resolution_set(unsigned int shader)
+static unsigned int glook_buffer_quad_create(void)
 {
-    int w, h, frame_size = 1;
-#ifdef __APPLE__
-    frame_size *= 2;
-#endif
-    glee_window_get_size(&w, &h);
-    float res[] = {(float)(w * frame_size), (float)(h * frame_size)};
-    glee_shader_uniform_set(shader, 2, "u_resolution", &res[0]);
+    const float vertices[] = {
+        1.0f,   1.0f,
+        1.0f,   -1.0f,
+        -1.0f,  -1.0f,
+        -1.0f,  1.0f
+    };
+    
+    const unsigned int indices[] = {
+        0,  1,  3,
+        1,  2,  3 
+    };
+
+    unsigned int id, VBO, EBO;
+    glGenVertexArrays(1, &id);
+    glBindVertexArray(id);
+    glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);  
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    return id;
 }
 
-int main(int argc, char** argv)
-{   
-    if (argc < 2) {
-        printf("Missing input shader. See -help for more information.\n");
+static void glook_mouse_pos(float* x, float* y)
+{
+    double mx, my;
+    glfwGetCursorPos(glook.window, &mx, &my);
+    *x = (float)mx;
+    *y = (float)glook.height - (float)my;
+}
+
+static unsigned int glook_key_pressed(unsigned int key)
+{
+    if (!glook.keys_pressed[key] && glook.keys[key]) {
+        glook.keys_pressed[key] = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static int glook_filepaths_count(void)
+{
+    int i;
+    for (i = 0; glook.filepaths[i] && i < GLOOK_FILE_COUNT; ++i);
+    return i;
+}
+
+static char* glook_filepath_copy(const char* src)
+{
+    char* ret;
+    int len = strlen(src);
+    ret = (char*)malloc(len + 1);
+    memcpy(ret, src, len + 1);
+    return ret;
+}
+
+static void glook_file_drop_callback(GLFWwindow* window, int count, const char** paths)
+{
+    int i, filecount = glook_filepaths_count();
+    for (i = 0; i < count; i++) {
+        if (filecount + 1 == GLOOK_FILE_COUNT) {
+            fprintf(
+                stderr,
+                "glook: cannot open more than %d files at once\n",
+                GLOOK_FILE_COUNT
+            );
+            break;
+        }
+        glook.filepaths[filecount++] = glook_filepath_copy(paths[i]);
+    }
+    (void)window;
+}
+
+static void glook_keyboard_callback(
+    GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    glook.keys[key] = action;
+    glook.keys_pressed[key] = glook.keys_pressed[key] * !!action;
+    (void)window;
+    (void)scancode;
+    (void)mods;
+}
+
+static void glook_window_size_callback(GLFWwindow* window, int width, int height)
+{
+    glook.width = width;
+    glook.height = height;
+    (void)window;
+}
+
+static int glook_window_create(
+    const char* title, int width, int height, unsigned int fullscreen)
+{
+    GLFWwindow* window;
+
+    if (width < 1 || height < 1) {
+        fprintf(stderr, "glook: invalid resolution: %dx%d\n", width, height);
         return EXIT_FAILURE;
     }
 
-    unsigned int w = 400, h = 300, x = 0, y = 0, f = 0;
-    char fragment_shader_path[BUFF_SIZE] = "$";
-    char window_title[BUFF_SIZE] = "glook";
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_SAMPLES, 4);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);    
+    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+#endif
 
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-help")) {
-            printf(" ============= glook GLSL shader visualizer ============== \n");
-            printf("\nEnter your input fragment shader '$ glsl file_path.frag'.\n");
-            printf("Use -w and -h to set the width and height of the visualizer.\n");
-            printf("Set the window position with -x and -y.\n");
-            printf("Use the -f flag for fullscreen and -t to set a title.\n");
-            printf("You can start off with a standard template using -template.\n");
-            printf("Use '&' as last argument to run in the background.\n\n");
-            return EXIT_SUCCESS;
-        } else if (!strcmp(argv[i], "-template")) {
-            glook_shader_write();
-            return EXIT_SUCCESS;
-        } else if (!strcmp(argv[i], "-w")) {
-            if (i + 1 >= argc) {
-                printf("Missing value for -w.\n");
-                return EXIT_FAILURE;
-            }
-            w = atoi(argv[i + 1]);
-            i++;
-        } else if (!strcmp(argv[i], "-h")) {
-            if (i + 1 >= argc) {
-                printf("Missing value for -h.\n");
-                return EXIT_FAILURE;
-            }
-            h = atoi(argv[i + 1]);
-            i++;
-        } else if (!strcmp(argv[i], "-x")) {
-            if (i + 1 >= argc) {
-                printf("Missing value for -x.\n");
-                return EXIT_FAILURE;
-            }
-            x = atoi(argv[i + 1]);
-            i++;
-        } else if (!strcmp(argv[i], "-y")) {
-            if (i + 1 >= argc) {
-                printf("Missing value for -y.\n");
-                return EXIT_FAILURE;
-            } 
-            y = atoi(argv[i + 1]);
-            i++;
-        } else if (!strcmp(argv[i], "-t")) {
-            if (i + 1 >= argc) {
-                printf("Missing value for -t.\n");
-                return EXIT_FAILURE;
-            }
-            strcpy(window_title, argv[i + 1]);
-            i++;
-        } else if (!strcmp(argv[i], "-f")) f = 1;
-        else strcpy(fragment_shader_path, argv[i]);
+    if (fullscreen) {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+        glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+        glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+        glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
+        window = glfwCreateWindow(mode->width, mode->height, title,monitor, NULL);
+        glook.width = mode->width;
+        glook.height = mode->height;
+    } else {
+        window = glfwCreateWindow(width, height, title, NULL, NULL);
+        glook.width = width;
+        glook.height = height;
     }
 
-    if (!strcmp(fragment_shader_path, "$")) {
-        printf("Missing input shader. See -help for more information.\n");
+    if (window == NULL) {
+        fprintf(stderr, "glook: could not open a glfw window\n");
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    glfwSetWindowAspectRatio(window, width, height);
+    glfwSetInputMode(window, GLFW_LOCK_KEY_MODS, GLFW_TRUE);
+    glfwSetWindowSizeCallback(window, glook_window_size_callback);
+    glfwSetDropCallback(window, glook_file_drop_callback);
+    glfwSetKeyCallback(window, glook_keyboard_callback);
+
+#ifndef __APPLE__
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) {
+        fprintf(stderr, "glook: failed to initiate glew\n");
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+#endif
+
+    glEnable(GL_MULTISAMPLE);
+    glEnable(GL_BLEND); 
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthFunc(GL_LESS);
+    glook.window = window;
+    return EXIT_SUCCESS;
+}
+
+static void glook_usage(void)
+{
+    fprintf(
+        stdout,
+        "<file>\t\t: read, compile and visualize <file> as GLSL shader\n"
+        "-w <uint>\t: set the width of the rendering window to <uint> pixels\n"
+        "-h <uint>\t: set the height of the rendering window to <uint> pixels\n"
+        "-f\t\t: visualize shader in fullscreen resolution\n"
+        "-template\t: write template shader 'template.glsl' at current directory\n"
+        "-help\t\t: print this help message\n"
+    );
+}
+
+int main(const int argc, const char** argv)
+{
+    char* fpath = NULL;
+    int i, w = 400, h = 300, f = 0, reload = 0;
+    float mx, my, rh, rw, time, tzero = 0.0F;
+    unsigned int shader, iTime, iMouse, iResolution;
+    for (i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            int* p = NULL;
+            if (!strcmp(argv[i] + 1, "help")) {
+                glook_usage();
+                return EXIT_SUCCESS;
+            } else if (!strcmp(argv[i] + 1, "template")) {
+                glook_template_write();
+                return EXIT_SUCCESS;
+            } else if (argv[i][1] == 'w' && !argv[i][2]) {
+                p = &w;
+            } else if (argv[i][1] == 'h' && !argv[i][2]) {
+                p = &h;
+            } else if (argv[i][1] == 'f' && !argv[i][2]) {
+                ++f;
+            } else {
+                fprintf(stderr, "glook: unknown option %s\n", argv[i]);
+            }
+
+            if (p) {
+                if (i + 1 >= argc) {
+                    fprintf(stderr, "glook: missing value for option %s\n", argv[i]);
+                    return EXIT_FAILURE;
+                }
+                *p = atoi(argv[++i]);
+            }
+        } else {
+            if (fpath) {
+                free(fpath);
+            }
+            fpath = glook_filepath_copy(argv[i]);
+        }
+    }        
+
+    if (!fpath) {
+        fprintf(stderr, "glook: missing input file. See -help for more information.\n");
         return EXIT_FAILURE;
     } 
 
-    glee_init();
-    glee_window_create(window_title, w, h, f, 0);
-    if (x != 0 || y != 0) glee_window_set_position(x, y);
-    glee_buffer_quad_create();
-    unsigned int shader = glook_shader_load(fragment_shader_path);
-    if (!shader) return EXIT_FAILURE;
-
-    glook_resolution_set(shader);
-    float mouse[2], time_current, time_start = glee_time_get();
-    while (glee_window_is_open()) {
-        glee_screen_clear();
-
-        time_current = glee_time_get() - time_start;
-        glee_mouse_pos(&mouse[0], &mouse[1]);
-
-        if (glee_key_pressed(GLFW_KEY_ESCAPE)) break;
-        if (glee_key_pressed(GLFW_KEY_R)) {
-            unsigned int new_shader = glook_shader_load(fragment_shader_path);
-            if (new_shader) {
-                glDeleteProgram(shader);
-                shader = new_shader;
-                glUseProgram(shader);
-                time_start = time_current;
-                glook_resolution_set(shader);
-            }
-        }
-        glee_shader_uniform_set(shader, 1, "u_time", &time_current);
-        glee_shader_uniform_set(shader, 2, "u_mouse", &mouse[0]);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        glee_screen_refresh();
+    if (!glfwInit()) {
+        fprintf(stderr, "glook: failed to initiate glfw\n");
+        free(fpath);
+        return EXIT_FAILURE;
     }
-    glee_deinit();
+
+    if (glook_window_create("glook", w, h, f)) {
+        glfwTerminate();
+        free(fpath);
+        return EXIT_FAILURE;
+    }
+
+    glook_buffer_quad_create();
+    shader = glook_shader_load(fpath);
+    if (!shader) {
+        return EXIT_FAILURE;
+    }
+
+    rw = (float)(w * GLOOK_SCALE);
+    rh = (float)(h * GLOOK_SCALE);
+    iTime = glGetUniformLocation(shader, "iTime");
+    iMouse = glGetUniformLocation(shader, "iMouse");
+    iResolution = glGetUniformLocation(shader, "iResolution");
+    glUniform2f(iResolution, rw, rh);
+
+    while (!glfwWindowShouldClose(glook.window)) {
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        time = glfwGetTime() - tzero;
+        glook_mouse_pos(&mx, &my);
+
+        if (glook_key_pressed(GLFW_KEY_ESCAPE)) {
+            break;
+        }
+        if (glook_key_pressed(GLFW_KEY_R)) {
+            ++reload; 
+        }
+        if (glook_key_pressed(GLFW_KEY_T)) {
+            tzero = time;
+        }
+        printf("%f, %f\n", mx, my);
+        if (glook.filepaths[0]) {
+            for (i = 0; glook.filepaths[i]; ++i) {
+                free(fpath);
+                fpath = glook_filepath_copy(glook.filepaths[i]);
+                free(glook.filepaths[i++]);
+            }
+            ++reload;
+        }
+
+        if (reload) {
+            unsigned int rshader = glook_shader_load(fpath);
+            if (rshader) {
+                glDeleteProgram(shader);
+                shader = rshader;
+                glUniform2f(iResolution, rw, rh);
+            }
+
+            tzero = time;
+            reload = 0;
+        }
+
+        glUniform1f(iTime, time);
+        glUniform2f(iMouse, mx, my);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+        glfwSwapBuffers(glook.window);
+        glfwPollEvents();
+    }
+
+    free(fpath);
+    glfwTerminate();
     return EXIT_SUCCESS;
 }
+

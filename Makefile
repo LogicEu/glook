@@ -1,44 +1,26 @@
-# glook makefile
+# glook Makefile
 
-STD=-std=c99
-WFLAGS=-Wall -Wextra
-OPT=-O2
-IDIR=-Iglee
-LIBS=glee
-CC=gcc
 NAME=glook
-SRC=*.c
+SRC=$(NAME).c
 
-CFLAGS=$(STD) $(WFLAGS) $(OPT) $(IDIR)
+CC=gcc
+STD=-std=c89
+OPT=-O2
+LIBS=-lglfw
+WFLAGS=-Wall -Wextra -pedantic
+
 OS=$(shell uname -s)
-
-LDIR=lib
-LSTATIC=$(patsubst %,lib%.a,$(LIBS))
-LPATHS=$(patsubst %,$(LDIR)/%,$(LSTATIC))
-LFLAGS=$(patsubst %,-L%,$(LDIR))
-LFLAGS += $(patsubst %,-l%,$(LIBS))
-LFLAGS += -lglfw
-
 ifeq ($(OS),Darwin)
-	OSFLAGS=-framework OpenGL -mmacos-version-min=10.9
+	LIBS+=-framework OpenGL
 else
-	OSFLAGS=-lGL -lGLEW
+	LIBS=-lGL -lGLEW
 endif
 
+CFLAGS=$(STD) $(OPT) $(WFLAGS)
+
 $(NAME): $(LPATHS) $(SRC)
-	$(CC) -o $@ $(SRC) $(CFLAGS) $(LFLAGS) $(OSFLAGS)
-
-$(LPATHS): $(LDIR) $(LSTATIC)
-	mv *.a $(LDIR)/
-
-$(LDIR): 
-	mkdir $@
-
-$(LDIR)%.a: %
-	cd $^ && make && mv $@ ../
+	$(CC) $(SRC) -o $@ $(CFLAGS) $(LIBS)
 
 clean:
-	rm -r $(LDIR)
-	
-install: $(NAME)
-	sudo mv $^ /usr/local/bin/
+	rm -r $(NAME)
+
