@@ -416,7 +416,7 @@ int main(const int argc, const char** argv)
         if (glook_key_pressed(GLFW_KEY_T)) {
             tzero = time;
         }
-        printf("%f, %f\n", mx, my);
+        
         if (glook.filepaths[0]) {
             for (i = 0; glook.filepaths[i]; ++i) {
                 free(fpath);
