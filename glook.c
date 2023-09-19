@@ -38,7 +38,7 @@ static const char glook_shader_body[] = GLOOK_GLSL_VERSION
 
 "uniform float iTime;\n"
 "uniform float iTimeDelta;\n"
-"uniform float iFrame;\n"
+"uniform int iFrame;\n"
 
 "uniform float iFrameRate;\n"
 "uniform vec4 iDate;\n"
@@ -47,7 +47,8 @@ static const char glook_shader_body[] = GLOOK_GLSL_VERSION
 "uniform sampler2D iChannel0;\n"
 "uniform sampler2D iChannel1;\n"
 "uniform sampler2D iChannel2;\n"
-"uniform sampler2D iChannel3;\n\n"
+"uniform sampler2D iChannel3;\n"
+"uniform vec3 iChannelResolution[4];\n\n"
 
 "void mainImage(out vec4, in vec2);\n\n"
 
@@ -68,8 +69,16 @@ static const char glook_shader_string_template[] =
 "void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
 "{\n"
 "    vec2 uv = fragCoord / iResolution.xy;\n"
-"    vec3 color = vec3(uv.x, uv.y, (cos(iTime) + 1.0) * 0.5);\n"
-"    fragColor = vec4(color, 1.0);\n"
+"    vec3 col = vec3(uv.x, uv.y, (cos(iTime) + 1.0) * 0.5);\n"
+"    fragColor = vec4(col, 1.0);\n"
+"}\n";
+
+static const char glook_shader_string_pass[] = 
+"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+"{\n"
+"    vec2 uv = fragCoord / iResolution.xy;\n"
+"    vec4 col = texture(iChannel0, uv);\n"
+"    fragColor = col;\n"
 "}\n";
 
 struct texture {
@@ -101,6 +110,7 @@ struct GLSLshader {
     unsigned int iMouse;
     unsigned int iResolution;
     unsigned int iChannels[GLOOK_INPUT_COUNT];
+    unsigned int iChannelResolution[GLOOK_INPUT_COUNT];
     int inputcount;
     struct input inputs[GLOOK_INPUT_COUNT];
     struct framebuffer framebuffer;
@@ -111,11 +121,13 @@ static struct glook {
     struct glook_opts {
         unsigned int dperf;
         unsigned int limit;
+        unsigned int chain;
     } opts;
     GLFWwindow* window;
     short int mouse[2];
-    int filecount, shadercount;
+    int filecount, shadercount, commonlen, commonlines;
     unsigned int width, height, vshader;
+    char* common, *commonpath;
     char* filepaths[GLOOK_FILE_COUNT];
     struct GLSLshader shaders[GLOOK_SHADER_COUNT];
     char keys[GLOOK_KEYBOARD_COUNT];
@@ -157,16 +169,18 @@ static void glook_error_log(const char* fmt, ...)
 static void glook_shader_error_log_line(
     char* line, const char* filebuf, const char* fpath)
 {
-    int linenum, i, j = 0;
+    int linenum, n, i, j = 0;
     line += 7;
     sscanf(line, "%d:%d%n", &j, &linenum, &i);
     line += i + 2;
     line[0] = tolower(line[0]);
-    
+
+    n = linenum < glook.commonlines;
     fprintf(
         stderr, 
         COLBLD "%s:%d:%d: " COLRED "error: " COLNRM COLBLD "%s\n" COLNRM,
-        fpath, j, linenum - 23, line
+        n ? glook.commonpath : fpath, j,
+        n ? linenum - 24 : linenum - glook.commonlines, line
     );
     
     for (i = 1; i < linenum; ++i) {
@@ -195,11 +209,24 @@ static void glook_shader_error_log(char* log, const char* filebuf, const char* f
 
 /* basic file io */
 
+static int glook_file_write(const char* fpath, const char* filebuf)
+{
+    FILE* file = fopen(fpath, "w");
+    if (!file) {
+        glook_error_log("could not write file '%s'\n", fpath);
+        return EXIT_FAILURE;
+    }
+    
+    fprintf(file, "%s", filebuf);
+    glook_log("created shader file: %s\n", fpath);
+    return fclose(file);
+}
+
 static char* glook_file_read(const char* path)
 {
     char* buffer;
-    size_t filelen;
     struct stat st;
+    size_t filelen, shaderlen;
     FILE* file = fopen(path, "rb");
     if (!file) {
         glook_error_log("could not open file '%s'\n", path);
@@ -213,25 +240,41 @@ static char* glook_file_read(const char* path)
     }
     
     filelen = st.st_size;
-    buffer = (char*)malloc(filelen + sizeof(glook_shader_body)); 
-    memcpy(buffer, glook_shader_body, sizeof(glook_shader_body));
-    fread(buffer + sizeof(glook_shader_body) - 1, 1, filelen, file);
-    buffer[sizeof(glook_shader_body) + filelen - 1] = 0;
+    shaderlen = filelen + glook.commonlen;
+    buffer = (char*)malloc(shaderlen + 1);
+    memcpy(buffer, glook.common, glook.commonlen);
+    fread(buffer + glook.commonlen, 1, filelen, file);
+    buffer[shaderlen] = 0;
     fclose(file);
     return buffer;
 }
 
-static int glook_file_write(const char* fpath, const char* filebuf)
+static void glook_file_common_measure(const char* common, int* size, int* lines)
 {
-    FILE* file = fopen(fpath, "w");
-    if (!file) {
-        glook_error_log("could not write file '%s'\n", fpath);
-        return EXIT_FAILURE;
+    int i, j = 0;
+    for (i = 0; common[i]; ++i) {
+        j += common[i] == '\n';
     }
-    
-    fprintf(file, "%s", filebuf);
-    glook_log("created shader file: %s\n", fpath);
-    return fclose(file);
+    *size = i;
+    *lines = j;
+}
+
+static void glook_file_common(const char* path)
+{
+    glook.common = (char*)(size_t)glook_shader_body;
+    glook.commonlen = sizeof(glook_shader_body) - 1;
+    glook.commonlines = 24;
+    if (path) {
+        char* common = glook_file_read(path);
+        if (!common) {
+            glook_error_log("could not read common header file: '%s'\n", path);
+        } else {
+            glook.common = common;
+            glook_file_common_measure(
+                glook.common, &glook.commonlen, &glook.commonlines
+            );
+        }
+    }
 }
 
 /* framebuffer to texture */
@@ -250,8 +293,8 @@ static struct texture glook_texture_framebuffer(void)
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id, 0
@@ -344,7 +387,7 @@ static void glook_shader_uniform_set(struct GLSLshader* shader, char* fpath)
     int i;
     struct tm tm;
     time_t t = time(NULL);
-    char channelstr[] = "iChannel0";
+    char channelstr[] = "iChannel0", resolutionstr[] = "iChannelResolution[0];";
     tm = *localtime(&t);
 
     shader->fpath = fpath;
@@ -357,8 +400,11 @@ static void glook_shader_uniform_set(struct GLSLshader* shader, char* fpath)
     shader->iMouse = glGetUniformLocation(shader->id, "iMouse");
  
     for (i = 0; i < GLOOK_INPUT_COUNT; ++i) {
-        channelstr[8] = i + '0';
+        char c = i + '0';
+        channelstr[8] = c;
+        resolutionstr[19] = c;
         shader->iChannels[i] = glGetUniformLocation(shader->id, channelstr);
+        shader->iChannelResolution[i] = glGetUniformLocation(shader->id, resolutionstr);
         glUniform1i(shader->iChannels[i], i);
     }
 
@@ -416,21 +462,21 @@ static struct GLSLshader* glook_shader_head(void)
     return glook.shaders + MIN(glook.shadercount - 1, (int)glook.opts.limit);
 }
 
-static unsigned int glook_shader_input_id(struct input input)
+static struct texture* glook_shader_input_texture(struct input input)
 {
     switch (input.type) {
         case GLOOK_FRAMEBUFFER: 
-            return ((struct GLSLshader*)input.data)->framebuffer.texture.id;
+            return &((struct GLSLshader*)input.data)->framebuffer.texture;
         case GLOOK_TEXTURE:
-            return ((struct texture*)input.data)->id;
+            return (struct texture*)input.data;
     }
     
     glook_error_log("invalid input type with value: %d\n", input.type);
-    return 0;
+    return NULL;
 }
 
 static void glook_shader_render(
-    struct GLSLshader* shader, float t, float dt, float f, float fps, float* mouse)
+    struct GLSLshader* shader, int frame, float t, float dt, float fps, float* mouse)
 {
     int i;
     for (i = 0; i < shader->inputcount; ++i) {
@@ -438,14 +484,21 @@ static void glook_shader_render(
             struct GLSLshader* inshader = shader->inputs[i].data;
             if (!inshader->rendered) {
                 inshader->rendered += shader == inshader;
-                glook_shader_render(inshader, t, dt, f, fps, mouse);
+                glook_shader_render(inshader, frame, t, dt, fps, mouse);
             }
         }
     }
 
     for (i = 0; i < shader->inputcount; ++i) {
+        struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
         glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, glook_shader_input_id(shader->inputs[i]));
+        glBindTexture(GL_TEXTURE_2D, texture->id);
+        glUniform3f(
+            shader->iChannelResolution[i],
+            (float)texture->width,
+            (float)texture->height,
+            1.0F
+        );
     }
 
     if (shader != glook_shader_head()) {
@@ -456,7 +509,7 @@ static void glook_shader_render(
     glUseProgram(shader->id);
     glUniform1f(shader->iTime, t);
     glUniform1f(shader->iTimeDelta, dt);
-    glUniform1f(shader->iFrame, f);
+    glUniform1i(shader->iFrame, frame);
     glUniform1f(shader->iFrameRate, fps);
     glUniform4f(shader->iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
@@ -483,6 +536,10 @@ static int glook_shader_pipeline_build(
             glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
             glook.shaders[index].inputs[i].data = glook.shaders + inputs[i] - 1;
         }
+    } else if (glook.opts.chain && index) { 
+        glook.shaders[index].inputs[0].type = GLOOK_FRAMEBUFFER;
+        glook.shaders[index].inputs[0].data = glook.shaders + index - 1;
+        return 1;
     } else {
         for (i = 0; i < index; ++i) {
             glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
@@ -551,9 +608,9 @@ static int glook_shader_pipeline_reload(void)
     return count;
 }
 
-static void glook_shader_pipeline_render(float t, float dt, float f, float* mouse)
+static void glook_shader_pipeline_render(int frame, float t, float dt, float* mouse)
 {
-    glook_shader_render(glook_shader_head(), t, dt, f, 1.0 / dt, mouse);
+    glook_shader_render(glook_shader_head(), frame, t, dt, 1.0 / dt, mouse);
     glfwSwapBuffers(glook.window);
     glfwPollEvents();
 }
@@ -786,12 +843,20 @@ static int glook_clear(void)
 }
 
 static void glook_deinit(void)
-{
+{ 
     glook_filepaths_free();
     glook_shader_pipeline_free();
     if (glook.vshader) {
         glDeleteShader(glook.vshader);
     }
+
+    if (glook.commonpath) {
+        free(glook.commonpath);
+        if (glook.common != &glook_shader_body[0]) {
+            free(glook.common);
+        }
+    }
+
     glfwTerminate();
 }
 
@@ -814,6 +879,7 @@ static int glook_init(int width, int height, int fullscreen)
     }
 
     glook_buffer_quad_create();
+    glook_file_common(glook.commonpath);
     glook.shadercount = glook_shader_pipeline_load();
     if (!glook.shadercount) {
         glook_error_log("could not succesfully compile any shader\n");
@@ -827,13 +893,12 @@ static int glook_init(int width, int height, int fullscreen)
 static void glook_run(void)
 {
     unsigned int i, frame = 0, reload = 0;
-    float mouse[4], f, t, dt, T = 0.0F, tzero = 0.0F;
+    float mouse[4], t, dt, T = 0.0F, tzero = 0.0F;
     while (glook_clear()) {
         t = glook_time();
         dt = t - T;
         T = t;
         t -= tzero;
-        f = (float)frame++;
 
         if (glook_key_pressed(GLFW_KEY_ESCAPE)) {
             break;
@@ -871,7 +936,7 @@ static void glook_run(void)
         }
 
         glook_mouse_get(mouse);
-        glook_shader_pipeline_render(t, dt, f, mouse);
+        glook_shader_pipeline_render(frame++, t, dt, mouse);
     }
 }
 
@@ -879,11 +944,17 @@ static void glook_usage(void)
 {
     glook_log(
         "\n<file>\t\t: read, compile and visualize <file> as GLSL shader\n"
+        "-c <file>\t\t: read file as common header file for all shaders in pipeline\n"
         "-w <uint>\t: set the width of the rendering window to <uint> pixels\n"
         "-h <uint>\t: set the height of the rendering window to <uint> pixels\n"
         "-f\t\t: visualize shader in fullscreen resolution\n"
         "-d\t\t: print runtime information about display and rendering\n"
+    );
+
+    glook_log(
+        "-chain\t: set structure of shader pipeline to link as a single chain\n"
         "-template\t: write template shader 'template.glsl' at current directory\n"
+        "-pass\t: write simple pass shader 'pass.glsl' taking input from iChannel0\n"
         "-help\t\t: print this help message\n"
     );
 }
@@ -893,13 +964,18 @@ int main(const int argc, const char** argv)
     int i, width = 640, height = 360, fullscreen = 0;
     for (i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
-            int* p = NULL;
+            int c = 0, *p = NULL;
             if (!strcmp(argv[i] + 1, "help")) {
                 glook_usage();
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "template")) {
                 glook_file_write("template.glsl", glook_shader_string_template);
                 return EXIT_SUCCESS;
+            } else if (!strcmp(argv[i] + 1, "pass")) {
+                glook_file_write("pass.glsl", glook_shader_string_pass);
+                return EXIT_SUCCESS;
+            } else if (!strcmp(argv[i] + 1, "chain")) {
+                ++glook.opts.chain;
             } else if (argv[i][1] == 'w' && !argv[i][2]) {
                 p = &width;
             } else if (argv[i][1] == 'h' && !argv[i][2]) {
@@ -908,17 +984,28 @@ int main(const int argc, const char** argv)
                 ++fullscreen;
             } else if (argv[i][1] == 'd' && !argv[i][2]) {
                 ++glook.opts.dperf;
+            } else if (argv[i][1] == 'c' && !argv[i][2]) {
+                ++c;
             } else {
                 glook_error_log("unknown argument: '%s'\n", argv[i]);
             }
 
-            if (p) {
+            if (p || c) {
                 if (i + 1 >= argc) {
                     glook_error_log(
                         "argument to '%s' is missing (expected 1 value)\n", 
                         argv[i]
                     );
-                } else *p = atoi(argv[++i]);
+                } else if (c) {
+                    if (glook.commonpath) {
+                        glook_error_log(
+                            "cannot include more than 1 file with the '%s' option\n",
+                            argv[i]
+                        );
+                    } else glook.commonpath = glook_strdup(argv[++i]);
+                } else {
+                    *p = atoi(argv[++i]);
+                }
             }
         } else glook_filepaths_push(argv[i]);
     }
