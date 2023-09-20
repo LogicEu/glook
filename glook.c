@@ -22,7 +22,7 @@
 #define BUFSIZE 1024
 #define LOGSIZE 512
 #define GLOOK_FILE_COUNT 5
-#define GLOOK_SHADER_COUNT 4
+#define GLOOK_SHADER_COUNT 8
 #define GLOOK_INPUT_COUNT 4
 #define GLOOK_KEYBOARD_COUNT 1024
 
@@ -305,7 +305,7 @@ static struct texture glook_texture_framebuffer(void)
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id, 0
     );
-
+    
     return texture;
 }
 
@@ -333,6 +333,7 @@ static struct framebuffer glook_framebuffer_create(void)
         fb.fbo = 0;
     }
 
+    glBindTexture(GL_TEXTURE_2D, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return fb;
 }
@@ -487,20 +488,27 @@ static struct texture* glook_shader_input_texture(struct input input)
     return NULL;
 }
 
-static void glook_shader_render_self(struct GLSLshader* shader)
+static void glook_shader_render_self(struct GLSLshader* shader, int index)
 {
-    const int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
-    glClear(GL_COLOR_BUFFER_BIT);
+    int i, w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE; 
+    for (i = 0; i < shader->inputcount; ++i) {
+        struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(
+            GL_TEXTURE_2D, index != i ? texture->id : shader->framebuffer.texture.id
+        );
+    }
     
-    /*
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
     glUseProgram(shader->id);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    */
+    glClear(GL_COLOR_BUFFER_BIT);
     
     glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.backbuffer.fbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -513,13 +521,17 @@ static void glook_shader_render(
             struct GLSLshader* inshader = shader->inputs[i].data;
             if (!inshader->rendered) {
                 if (inshader == shader) {
-                    glook_shader_render_self(inshader);
+                    glook_shader_render_self(inshader, i);
                     self = i;
                 } else {
                     glook_shader_render(inshader, frame, t, dt, fps, mouse);
                 }
             }
         }
+    }
+
+    if (shader != glook_shader_head()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, shader->framebuffer.fbo);
     }
 
     for (i = 0; i < shader->inputcount; ++i) {
@@ -530,18 +542,15 @@ static void glook_shader_render(
         );
     }
 
-    if (shader != glook_shader_head()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, shader->framebuffer.fbo);
-    }
-
-    glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(shader->id);
+    glClear(GL_COLOR_BUFFER_BIT);
     glUniform1f(shader->iTime, t);
     glUniform1f(shader->iTimeDelta, dt);
     glUniform1i(shader->iFrame, frame);
     glUniform1f(shader->iFrameRate, fps);
     glUniform4f(shader->iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0); 
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     ++shader->rendered;
 }
@@ -566,7 +575,7 @@ static int glook_shader_pipeline_build(
             glook.shaders[index].inputs[i].data = glook.shaders + inputs[i] - 1;
             self += (index == inputs[i] - 1);
         }
-    } else if (glook.opts.chain && index) { 
+    } else if (glook.opts.chain && index) {
         glook.shaders[index].inputs[0].type = GLOOK_FRAMEBUFFER;
         glook.shaders[index].inputs[0].data = glook.shaders + index - 1;
         return 1;
@@ -621,7 +630,7 @@ static int glook_shader_pipeline_load(void)
         glook.filepaths[i] = NULL;
     }
 
-    glook.opts.limit = count - 1;
+    glook.opts.limit = GLOOK_SHADER_COUNT - 1;
     glook.filecount = 0;
     return count;
 }
@@ -743,8 +752,20 @@ static void glook_file_drop(void)
 {
     int i;
     for (i = 0; i < glook.filecount; ++i) {
-        free(glook.shaders[glook.shadercount - 1].fpath);
-        glook.shaders[glook.shadercount - 1].fpath = glook.filepaths[i];
+        if (glook.shadercount < GLOOK_SHADER_COUNT) {
+            struct GLSLshader shader = glook_shader_load(glook.filepaths[i]);
+            if (shader.id) {
+                glook.shaders[glook.shadercount] = shader;
+                glook.shaders[glook.shadercount].inputcount = 
+                glook_shader_pipeline_build(NULL, 0, glook.shadercount);
+                ++glook.shadercount;
+            } else {
+                free(glook.filepaths[i]);
+            }
+        } else {
+            free(glook.shaders[glook.shadercount - 1].fpath);
+            glook.shaders[glook.shadercount - 1].fpath = glook.filepaths[i];
+        }
         glook.filepaths[i] = NULL;
     }
     glook.filecount = 0;
@@ -953,8 +974,12 @@ static void glook_run(void)
         if (glook_key_pressed(GLFW_KEY_SPACE)) {
             pause = !pause;
         }
+        if (glook.shadercount > 1 &&
+            glook.keys[GLFW_KEY_LEFT_SHIFT] && glook_key_pressed(GLFW_KEY_P)) {
+            glook_shader_free(glook.shaders + --glook.shadercount);
+        }
 
-        for (i = 0; i < GLOOK_INPUT_COUNT; ++i) {
+        for (i = 0; i < GLOOK_SHADER_COUNT; ++i) {
             if (glook_key_pressed(i + 48)) {
                 glook.opts.limit = i;
                 break;
