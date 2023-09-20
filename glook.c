@@ -39,7 +39,6 @@ static const char glook_shader_body[] = GLOOK_GLSL_VERSION
 "uniform float iTime;\n"
 "uniform float iTimeDelta;\n"
 "uniform int iFrame;\n"
-
 "uniform float iFrameRate;\n"
 "uniform vec4 iDate;\n"
 "uniform vec3 iResolution;\n"
@@ -130,6 +129,7 @@ static struct glook {
     char* common, *commonpath;
     char* filepaths[GLOOK_FILE_COUNT];
     struct GLSLshader shaders[GLOOK_SHADER_COUNT];
+    struct framebuffer backbuffer;
     char keys[GLOOK_KEYBOARD_COUNT];
     char keys_pressed[GLOOK_KEYBOARD_COUNT];
 } glook = {0};
@@ -170,11 +170,17 @@ static void glook_shader_error_log_line(
     char* line, const char* filebuf, const char* fpath)
 {
     int linenum, n, i, j = 0;
-    line += 7;
-    sscanf(line, "%d:%d%n", &j, &linenum, &i);
+    line += 7; /* 'ERROR: ' */
+    if (sscanf(line, "%d:%d%n", &j, &linenum, &i) < 2) {
+        line[0] = tolower(line[0]);
+        fprintf(stderr, COLBLD "%s: " COLRED "error: " COLNRM COLBLD "%s\n" COLNRM,
+            fpath, line
+        );
+        return;
+    }
+    
     line += i + 2;
     line[0] = tolower(line[0]);
-
     n = linenum < glook.commonlines;
     fprintf(
         stderr, 
@@ -387,7 +393,7 @@ static void glook_shader_uniform_set(struct GLSLshader* shader, char* fpath)
     int i;
     struct tm tm;
     time_t t = time(NULL);
-    char channelstr[] = "iChannel0", resolutionstr[] = "iChannelResolution[0];";
+    char channelstr[] = "iChannel0", resolutionstr[] = "iChannelResolution[0]";
     tm = *localtime(&t);
 
     shader->fpath = fpath;
@@ -398,7 +404,7 @@ static void glook_shader_uniform_set(struct GLSLshader* shader, char* fpath)
     shader->iDate = glGetUniformLocation(shader->id, "iDate");
     shader->iResolution = glGetUniformLocation(shader->id, "iResolution");
     shader->iMouse = glGetUniformLocation(shader->id, "iMouse");
- 
+
     for (i = 0; i < GLOOK_INPUT_COUNT; ++i) {
         char c = i + '0';
         channelstr[8] = c;
@@ -406,12 +412,18 @@ static void glook_shader_uniform_set(struct GLSLshader* shader, char* fpath)
         shader->iChannels[i] = glGetUniformLocation(shader->id, channelstr);
         shader->iChannelResolution[i] = glGetUniformLocation(shader->id, resolutionstr);
         glUniform1i(shader->iChannels[i], i);
+        glUniform3f(
+            shader->iChannelResolution[i], 
+            (float)(glook.width * GLOOK_SCALE),
+            (float)(glook.height * GLOOK_SCALE),
+            1.0F
+        );
     }
 
     glUniform3f(
             shader->iResolution,
-            (float)glook.width * GLOOK_SCALE,
-            (float)glook.height * GLOOK_SCALE,
+            (float)(glook.width * GLOOK_SCALE),
+            (float)(glook.height * GLOOK_SCALE),
             1.0F
     );
 
@@ -475,16 +487,37 @@ static struct texture* glook_shader_input_texture(struct input input)
     return NULL;
 }
 
+static void glook_shader_render_self(struct GLSLshader* shader)
+{
+    const int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
+    glClear(GL_COLOR_BUFFER_BIT);
+    
+    /*
+    glUseProgram(shader->id);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    */
+    
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.backbuffer.fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 static void glook_shader_render(
     struct GLSLshader* shader, int frame, float t, float dt, float fps, float* mouse)
 {
-    int i;
+    int i, self = -1;
     for (i = 0; i < shader->inputcount; ++i) {
         if (shader->inputs[i].type == GLOOK_FRAMEBUFFER) {
             struct GLSLshader* inshader = shader->inputs[i].data;
             if (!inshader->rendered) {
-                inshader->rendered += shader == inshader;
-                glook_shader_render(inshader, frame, t, dt, fps, mouse);
+                if (inshader == shader) {
+                    glook_shader_render_self(inshader);
+                    self = i;
+                } else {
+                    glook_shader_render(inshader, frame, t, dt, fps, mouse);
+                }
             }
         }
     }
@@ -492,12 +525,8 @@ static void glook_shader_render(
     for (i = 0; i < shader->inputcount; ++i) {
         struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
         glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, texture->id);
-        glUniform3f(
-            shader->iChannelResolution[i],
-            (float)texture->width,
-            (float)texture->height,
-            1.0F
+        glBindTexture(
+            GL_TEXTURE_2D, self != i ? texture->id : glook.backbuffer.texture.id
         );
     }
 
@@ -522,7 +551,7 @@ static void glook_shader_render(
 static int glook_shader_pipeline_build(
     const int* inputs, int inputcount, const int index)
 {
-    int i, j = 0;
+    int i, j = 0, self = 0;
     if (inputcount) {
         for (i = 0; i < inputcount; ++i) {
             if (inputs[i] < 1 || inputs[i] > 4) {
@@ -535,6 +564,7 @@ static int glook_shader_pipeline_build(
             }
             glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
             glook.shaders[index].inputs[i].data = glook.shaders + inputs[i] - 1;
+            self += (index == inputs[i] - 1);
         }
     } else if (glook.opts.chain && index) { 
         glook.shaders[index].inputs[0].type = GLOOK_FRAMEBUFFER;
@@ -544,8 +574,14 @@ static int glook_shader_pipeline_build(
         for (i = 0; i < index; ++i) {
             glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
             glook.shaders[index].inputs[i].data = glook.shaders + i;
+            self += (index == i);
         }
     }
+    
+    if (self) {
+        glook.backbuffer = glook_framebuffer_create();
+    }
+
     return i - j;
 }
 
@@ -611,8 +647,6 @@ static int glook_shader_pipeline_reload(void)
 static void glook_shader_pipeline_render(int frame, float t, float dt, float* mouse)
 {
     glook_shader_render(glook_shader_head(), frame, t, dt, 1.0 / dt, mouse);
-    glfwSwapBuffers(glook.window);
-    glfwPollEvents();
 }
 
 static void glook_shader_pipeline_clear(void)
@@ -656,9 +690,13 @@ static void glook_mouse_pos(float* x, float* y)
 
 static void glook_mouse_get(float* mouse)
 {
-    glook_mouse_pos(mouse, mouse + 1);
-    mouse[2] = (float)glook_mouse_down(GLFW_MOUSE_BUTTON_LEFT);
-    mouse[3] = (float)glook_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT);
+    int pressed = glook_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT);
+    int down = glook_mouse_down(GLFW_MOUSE_BUTTON_LEFT);
+    if (down) {
+        glook_mouse_pos(mouse, mouse + 1);
+        mouse[2] = (float)down;
+        mouse[3] = (float)pressed;
+    }
 }
 
 /* keyboard control functions */
@@ -839,6 +877,8 @@ static float glook_time(void)
 static int glook_clear(void)
 {
     glook_shader_pipeline_clear();
+    glfwSwapBuffers(glook.window);
+    glfwPollEvents();
     return !glfwWindowShouldClose(glook.window);
 }
 
@@ -855,6 +895,10 @@ static void glook_deinit(void)
         if (glook.common != &glook_shader_body[0]) {
             free(glook.common);
         }
+    }
+
+    if (glook.backbuffer.fbo) {
+        glDeleteFramebuffers(1, &glook.backbuffer.fbo);
     }
 
     glfwTerminate();
@@ -892,14 +936,10 @@ static int glook_init(int width, int height, int fullscreen)
 
 static void glook_run(void)
 {
-    unsigned int i, frame = 0, reload = 0;
-    float mouse[4], t, dt, T = 0.0F, tzero = 0.0F;
+    unsigned int i, frame = 0, reload = 0, pause = 0;
+    float mouse[4], t, dt, T = 0.0F, tzero = 0.0F, pt = 0.0F;
+    
     while (glook_clear()) {
-        t = glook_time();
-        dt = t - T;
-        T = t;
-        t -= tzero;
-
         if (glook_key_pressed(GLFW_KEY_ESCAPE)) {
             break;
         }
@@ -908,6 +948,10 @@ static void glook_run(void)
         }
         if (glook_key_pressed(GLFW_KEY_T)) {
             tzero = t;
+            frame = 0;
+        }
+        if (glook_key_pressed(GLFW_KEY_SPACE)) {
+            pause = !pause;
         }
 
         for (i = 0; i < GLOOK_INPUT_COUNT; ++i) {
@@ -934,6 +978,16 @@ static void glook_run(void)
                 glook.width, glook.height, 1.0F / dt, frame, t
             );
         }
+
+        if (pause) {
+            pt = glook_time() - t;
+            continue;
+        }
+
+        t = glook_time() - pt;
+        dt = t - T;
+        T = t;
+        t -= tzero;
 
         glook_mouse_get(mouse);
         glook_shader_pipeline_render(frame++, t, dt, mouse);
