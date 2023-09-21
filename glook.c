@@ -365,7 +365,6 @@ static int glook_shader_compile(
     if (!success) {
         glGetShaderInfoLog(shader, LOGSIZE, NULL, log);
         glook_shader_error_log(log, filebuf, fpath);
-        glook_error_log("failed to compile shader\n");
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
@@ -480,10 +479,9 @@ static struct texture* glook_shader_input_texture(struct input input)
     switch (input.type) {
         case GLOOK_FRAMEBUFFER: 
             return &((struct GLSLshader*)input.data)->framebuffer.texture;
-        case GLOOK_TEXTURE:
-            return (struct texture*)input.data;
+        case GLOOK_TEXTURE: break;
     }
-    
+
     glook_error_log("invalid input type with value: %d\n", input.type);
     return NULL;
 }
@@ -557,105 +555,128 @@ static void glook_shader_render(
 
 /* pipeline and shader arrays */
 
-static int glook_shader_pipeline_build(
-    const int* inputs, int inputcount, const int index)
+static struct input glook_shader_input(void *data)
 {
-    int i, j = 0, self = 0;
+    struct input input;
+    input.type = GLOOK_FRAMEBUFFER;
+    input.data = data;
+    return input;
+}
+
+static int glook_shader_pipeline_build(
+    struct GLSLshader* shader, const int index, const char* inputs, int inputcount)
+{
+    int i, self = 0;
     if (inputcount) {
         for (i = 0; i < inputcount; ++i) {
-            if (inputs[i] < 1 || inputs[i] > 4) {
-                glook_error_log(
-                    "invalid input channel %d: must be in range (0 - %d)\n", 
-                    inputs[i], GLOOK_INPUT_COUNT - 1
-                );
-                ++j;
-                continue;
-            }
-            glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
-            glook.shaders[index].inputs[i].data = glook.shaders + inputs[i] - 1;
-            self += (index == inputs[i] - 1);
+            int n = inputs[i] - '0';
+            shader->inputs[i] = glook_shader_input(glook.shaders + n);
+            self += (index == n);
         }
     } else if (glook.opts.chain && index) {
-        glook.shaders[index].inputs[0].type = GLOOK_FRAMEBUFFER;
-        glook.shaders[index].inputs[0].data = glook.shaders + index - 1;
-        return 1;
+        i = 1;
+        shader->inputs[0] = glook_shader_input(glook.shaders + index - 1);
     } else {
         for (i = 0; i < index; ++i) {
-            glook.shaders[index].inputs[i].type = GLOOK_FRAMEBUFFER;
-            glook.shaders[index].inputs[i].data = glook.shaders + i;
-            self += (index == i);
+            shader->inputs[i] = glook_shader_input(glook.shaders + i);
         }
     }
-    
+
     if (self) {
         glook.backbuffer = glook_framebuffer_create();
     }
 
-    return i - j;
+    return i;
+}
+
+static int glook_shader_input_parse(char* fpath, char** path, char* inputs)
+{
+    static const char* div = ";:,";
+    char* tok;
+    int inputcount = 0;
+    *path = strtok(fpath, div);
+    while ((tok = strtok(NULL, div))) {
+        if (inputcount >= GLOOK_INPUT_COUNT) {
+            glook_error_log(
+                "cannot link to more than %d inputs\n", GLOOK_INPUT_COUNT
+            );
+            break;
+        }
+        
+        while (*tok) {
+            if (*tok < '0' || *tok > GLOOK_SHADER_COUNT + '0') {
+                 glook_error_log(
+                    "invalid input channel %d: must be in range (0 - %d)\n", 
+                    *tok, GLOOK_SHADER_COUNT
+                );
+            } else {
+                inputs[inputcount++] = *tok;
+            }
+            ++tok;
+        }
+    }
+
+    return inputcount;
+}
+
+static int glook_shader_push(char* fpath)
+{
+    int inputcount;
+    struct GLSLshader shader;
+    char *path, inputs[GLOOK_INPUT_COUNT] = {0}; 
+    if (glook.shadercount >= GLOOK_SHADER_COUNT) {
+        glook_error_log(
+            "cannot pipeline more than %d shaders at once\n", GLOOK_SHADER_COUNT
+        );
+        return EXIT_FAILURE;
+    }
+    
+    inputcount = glook_shader_input_parse(fpath, &path, inputs);
+    shader = glook_shader_load(path);
+    if (shader.id) {
+        shader.inputcount = glook_shader_pipeline_build(
+            &shader, glook.shadercount, inputs, inputcount
+        );
+        glook.shaders[glook.shadercount++] = shader;
+    }
+
+    return !shader.id * 2;
+}
+
+static int glook_shader_reload(struct GLSLshader* shader)
+{
+    struct GLSLshader reload = glook_shader_load(shader->fpath);
+    if (reload.id) {
+        reload.inputcount = shader->inputcount;
+        memcpy(reload.inputs, shader->inputs, sizeof(reload.inputs));
+        shader->fpath = NULL;
+        glook_shader_free(shader);
+        *shader = reload;
+    }
+    return !reload.id;
 }
 
 static int glook_shader_pipeline_load(void)
 {
-    static const char* div = ";:,";
-    char* path, *tok;
-    int i, count = 0;
+    int i, err = 0;
     for (i = 0; i < glook.filecount; ++i) {
-        if (count == GLOOK_SHADER_COUNT) {
-            glook_error_log(
-                "cannot pipeline more than %d shaders at once\n", GLOOK_SHADER_COUNT
-            );
-            break;
-        }
-
-        path = strtok(glook.filepaths[i], div);
-        glook.shaders[count] = glook_shader_load(path);
-        if (!glook.shaders[count].id) {
+        if (glook_shader_push(glook.filepaths[i])) {
             free(glook.filepaths[i]);
-        } else {
-            int inputs[GLOOK_INPUT_COUNT] = {0}, inputcount = 0;
-            while ((tok = strtok(NULL, div))) {
-                if (inputcount > GLOOK_INPUT_COUNT) {
-                    glook_error_log(
-                        "cannot link to more than %d inputs\n", GLOOK_INPUT_COUNT
-                    );
-                    break;
-                }
-                inputs[inputcount++] = atoi(tok) + 1;
-            }
-            glook.shaders[count].inputcount = glook_shader_pipeline_build(
-                inputs, inputcount, count
-            );
-            ++count;
-        }
+            ++err;
+        } 
         glook.filepaths[i] = NULL;
     }
-
-    glook.opts.limit = GLOOK_SHADER_COUNT - 1;
     glook.filecount = 0;
-    return count;
+    return err;
 }
 
 static int glook_shader_pipeline_reload(void)
 {
-    int i, count = 0;
+    int i, err = 0;
     for (i = 0; i < glook.shadercount; ++i) {
-        struct GLSLshader shader = glook_shader_load(glook.shaders[i].fpath);
-        if (shader.id) {
-            shader.inputcount = glook.shaders[i].inputcount;
-            memcpy(shader.inputs, glook.shaders[i].inputs, sizeof(shader.inputs));
-            glook.shaders[i].fpath = NULL;
-            glook_shader_free(glook.shaders + i);
-            glook.shaders[i] = shader;
-            ++count;
-        }
+        err += glook_shader_reload(glook.shaders + i);
     }
-    
-    return count;
-}
-
-static void glook_shader_pipeline_render(int frame, float t, float dt, float* mouse)
-{
-    glook_shader_render(glook_shader_head(), frame, t, dt, 1.0 / dt, mouse);
+    return err;
 }
 
 static void glook_shader_pipeline_clear(void)
@@ -672,6 +693,11 @@ static void glook_shader_pipeline_free(void)
     for (i = 0; i < glook.shadercount; ++i) {
         glook_shader_free(glook.shaders + i);
     }
+}
+
+static void glook_shader_pipeline_render(int frame, float t, float dt, float* mouse)
+{
+    glook_shader_render(glook_shader_head(), frame, t, dt, 1.0 / dt, mouse);
 }
 
 /* mouse control functions */
@@ -709,6 +735,11 @@ static void glook_mouse_get(float* mouse)
 }
 
 /* keyboard control functions */
+
+static unsigned int glook_key_down(unsigned int key)
+{
+    return glook.keys[key];
+}
 
 static unsigned int glook_key_pressed(unsigned int key)
 {
@@ -752,17 +783,7 @@ static void glook_file_drop(void)
 {
     int i;
     for (i = 0; i < glook.filecount; ++i) {
-        if (glook.shadercount < GLOOK_SHADER_COUNT) {
-            struct GLSLshader shader = glook_shader_load(glook.filepaths[i]);
-            if (shader.id) {
-                glook.shaders[glook.shadercount] = shader;
-                glook.shaders[glook.shadercount].inputcount = 
-                glook_shader_pipeline_build(NULL, 0, glook.shadercount);
-                ++glook.shadercount;
-            } else {
-                free(glook.filepaths[i]);
-            }
-        } else {
+        if (glook_shader_push(glook.filepaths[i]) == EXIT_FAILURE) {
             free(glook.shaders[glook.shadercount - 1].fpath);
             glook.shaders[glook.shadercount - 1].fpath = glook.filepaths[i];
         }
@@ -945,13 +966,14 @@ static int glook_init(int width, int height, int fullscreen)
 
     glook_buffer_quad_create();
     glook_file_common(glook.commonpath);
-    glook.shadercount = glook_shader_pipeline_load();
+    glook_shader_pipeline_load();
     if (!glook.shadercount) {
         glook_error_log("could not succesfully compile any shader\n");
         glook_deinit();
         return EXIT_FAILURE;
     }
 
+    glook.opts.limit = GLOOK_SHADER_COUNT - 1;
     return EXIT_SUCCESS;
 }
 
@@ -975,7 +997,7 @@ static void glook_run(void)
             pause = !pause;
         }
         if (glook.shadercount > 1 &&
-            glook.keys[GLFW_KEY_LEFT_SHIFT] && glook_key_pressed(GLFW_KEY_P)) {
+            glook_key_down(GLFW_KEY_LEFT_SHIFT) && glook_key_pressed(GLFW_KEY_P)) {
             glook_shader_free(glook.shaders + --glook.shadercount);
         }
 
