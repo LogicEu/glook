@@ -980,7 +980,6 @@ static int glook_window_create(
     glfwSwapInterval(1);
 
     glfwSetWindowAspectRatio(window, width, height);
-    glfwSetInputMode(window, GLFW_LOCK_KEY_MODS, GLFW_TRUE);
     glfwSetWindowSizeCallback(window, glook_window_size_callback);
     glfwSetDropCallback(window, glook_file_drop_callback);
     glfwSetKeyCallback(window, glook_keyboard_callback);
@@ -1067,7 +1066,7 @@ static int glook_init(int width, int height, int fullscreen, char* commonpath)
 static void glook_run(void)
 {
     unsigned int i, frame = 0, reload = 0, pause = 0;
-    float mouse[4], t, dt, T = 0.0F, tzero = 0.0F, pt = 0.0F;
+    float mouse[4], t = 0.0, dt = 1.0, T = 0.0F, tzero = 0.0F, pt = 0.0F;
     
     while (glook_clear()) {
         if (glook_key_pressed(GLFW_KEY_ESCAPE)) {

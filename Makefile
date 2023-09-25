@@ -13,7 +13,7 @@ OS=$(shell uname -s)
 ifeq ($(OS),Darwin)
 	LIBS+=-framework OpenGL
 else
-	LIBS=-lGL -lGLEW
+	LIBS+=-lGL -lGLEW
 endif
 
 CFLAGS=$(STD) $(OPT) $(WFLAGS)
