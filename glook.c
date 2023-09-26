@@ -842,10 +842,10 @@ static void glook_mouse_get(float* mouse)
 {
     int pressed = glook_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT);
     int down = glook_mouse_down(GLFW_MOUSE_BUTTON_LEFT);
+    mouse[2] = (float)((down * 2 - 1) * mouse[0]);
+    mouse[3] = (float)((pressed * 2 - 1) * mouse[1]);
     if (down) {
         glook_mouse_pos(mouse, mouse + 1);
-        mouse[2] = (float)down;
-        mouse[3] = (float)pressed;
     }
 }
 
