@@ -81,10 +81,11 @@ static const char glook_shader_body[] = GLOOK_GLSL_VERSION
 "void main(void)\n"
 "{\n"
 "    mainImage(_glookFragColor, gl_FragCoord.xy);\n"
+"    _glookFragColor.w = 1.0;\n"
 "}\n\n";
 
 static const char glook_shader_string_quad[] = GLOOK_GLSL_VERSION
-"layout (location = 0) in vec2 vertCoord;\n"
+"layout (location = 0) in vec2 vertCoord;\n\n"
 
 "void main(void)\n"
 "{\n"
@@ -99,12 +100,14 @@ static const char glook_shader_string_template[] =
 "    fragColor = vec4(col, 1.0);\n"
 "}\n";
 
-static const char glook_shader_string_pass[] = 
-"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+static const char glook_shader_string_pass[] = GLOOK_GLSL_VERSION 
+"out vec4 _glookFragColor;\n\n"
+
+"uniform sampler2D iChannel0;\n\n"
+
+"void main(void)\n"
 "{\n"
-"    vec2 uv = fragCoord / iResolution.xy;\n"
-"    vec4 col = texture(iChannel0, uv);\n"
-"    fragColor = col;\n"
+"    _glookFragColor = texelFetch(iChannel0, ivec2(gl_FragCoord.xy), 0);\n"
 "}\n";
 
 struct texture {
@@ -171,7 +174,7 @@ static struct glook {
     int filecount;
     char* filepaths[GLOOK_FILE_COUNT];
     struct pipeline pipeline;
-    struct framebuffer backbuffer;
+    struct shader shaderpass;
     char keys[GLOOK_KEYBOARD_COUNT];
     char keys_pressed[GLOOK_KEYBOARD_COUNT];
     short int mouse[2];
@@ -478,15 +481,24 @@ static struct texture glook_texture_framebuffer(void)
         0, GL_RGBA, GL_UNSIGNED_BYTE, NULL
     );
 
+    /*
+    unsigned int lod = 0, w = glook.width;
+    while (w >>= 1) {
+        ++lod;
+    }
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAX_LEVEL, lod);
+    */
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id, 0
     );
-    
+    /*glGenerateMipmap(GL_TEXTURE_2D);*/
+
     return texture;
 }
 
@@ -496,7 +508,7 @@ static struct framebuffer glook_framebuffer_create(void)
     struct framebuffer fb;
     glGenFramebuffers(1, &fb.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
-    
+
     fb.texture = glook_texture_framebuffer();
     glGenRenderbuffers(1, &rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, rbo); 
@@ -519,36 +531,37 @@ static struct framebuffer glook_framebuffer_create(void)
     return fb;
 }
 
-static struct shader glook_shader_load(char* fpath, struct common* common)
+static struct shader glook_shader_load_buffer(
+    const char* buf, char* fpath, const struct common* common)
 {
-    char* filebuf;
     unsigned int fshader;
     struct shader shader = {0};
     shader.id = glCreateProgram();
-    filebuf = glook_file_shader_read(fpath, common);
-    if (!filebuf) {
-        glook_shader_free(&shader);
-        return shader;
-    }
-
     fshader = glCreateShader(GL_FRAGMENT_SHADER);
-    if (glook_shader_compile(fshader, filebuf, fpath, common)) {
+    if (glook_shader_compile(fshader, buf, fpath, common) ||
+        glook_shader_link(shader.id, fshader, buf, fpath, common)) {
         glook_shader_free(&shader);
-        return shader;
+    } else {
+        glUseProgram(shader.id);
+        shader.fpath = fpath;
+        shader.locator = glook_shader_ulocator_create(shader.id);
+        shader.framebuffer = glook_framebuffer_create();
     }
 
-    if (glook_shader_link(shader.id, fshader, filebuf, fpath, common)) {
-        glook_shader_free(&shader);
-        return shader;
-    }
-    
-    glUseProgram(shader.id);
-    shader.fpath = fpath;
-    shader.locator = glook_shader_ulocator_create(shader.id);
-    shader.framebuffer = glook_framebuffer_create();
     glDeleteShader(fshader);
+    return shader;
+}
 
-    free(filebuf);
+static struct shader glook_shader_load(char* fpath, struct common* common)
+{
+    char* filebuf;
+    struct shader shader = {0};
+    filebuf = glook_file_shader_read(fpath, common);
+    if (filebuf) {
+        shader = glook_shader_load_buffer(filebuf, fpath, common);
+        free(filebuf);
+    }
+
     return shader;
 }
 
@@ -585,28 +598,27 @@ static struct texture* glook_shader_input_texture(struct input input)
     return NULL;
 }
 
-static void glook_shader_render_self(struct shader* shader, int index)
+static void glook_shader_render_self(struct shader* shader)
 {
-    int i, w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE; 
-    for (i = 0; i < shader->inputcount; ++i) {
-        struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(
-            GL_TEXTURE_2D, index != i ? texture->id : shader->framebuffer.texture.id
-        );
-    }
-    
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
-    glUseProgram(shader->id);
+    /*int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;*/
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
+    glUseProgram(glook.shaderpass.id);
     glClear(GL_COLOR_BUFFER_BIT);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.backbuffer.fbo);
+    /*glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.backbuffer.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);*/
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    /*
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, glook.shaderpass.framebuffer.texture.id);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    */
 }
 
 static void glook_shader_render(
@@ -618,7 +630,7 @@ static void glook_shader_render(
             struct shader* inshader = shader->inputs[i].data;
             if (!inshader->rendered) {
                 if (inshader == shader) {
-                    glook_shader_render_self(inshader, i);
+                    glook_shader_render_self(inshader);
                     self = i;
                 } else {
                     glook_shader_render(inshader, frame, t, dt, fps, mouse);
@@ -635,7 +647,8 @@ static void glook_shader_render(
         struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(
-            GL_TEXTURE_2D, self != i ? texture->id : glook.backbuffer.texture.id
+                GL_TEXTURE_2D,
+                self != i ? texture->id : glook.shaderpass.framebuffer.texture.id
         );
     }
 
@@ -646,9 +659,15 @@ static void glook_shader_render(
     glUniform1i(shader->locator.iFrame, frame);
     glUniform1f(shader->locator.iFrameRate, fps);
     glUniform4f(shader->locator.iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0); 
-
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    /*
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    */
     ++shader->rendered;
 }
 
@@ -712,8 +731,10 @@ static int glook_shader_input_connect(
         }
     }
 
-    if (self) {
-        glook.backbuffer = glook_framebuffer_create();
+    if (self && !glook.shaderpass.id) {
+        glook.shaderpass = glook_shader_load_buffer(
+            glook_shader_string_pass, NULL, NULL
+        );
     }
 
     return i;
@@ -1027,10 +1048,7 @@ static void glook_deinit(void)
         glDeleteShader(glook.vshader);
     }
 
-    if (glook.backbuffer.fbo) {
-        glDeleteFramebuffers(1, &glook.backbuffer.fbo);
-    }
-
+    glook_shader_free(&glook.shaderpass);
     glfwTerminate();
 }
 
@@ -1066,7 +1084,7 @@ static int glook_init(int width, int height, int fullscreen, char* commonpath)
 static void glook_run(void)
 {
     unsigned int i, frame = 0, reload = 0, pause = 0;
-    float mouse[4], t = 0.0, dt = 1.0, T = 0.0F, tzero = 0.0F, pt = 0.0F;
+    float mouse[4], t = 0.0F, dt = 1.0F, T = 0.0F, tzero = 0.0F, pt = 0.0F;
     
     while (glook_clear()) {
         if (glook_key_pressed(GLFW_KEY_ESCAPE)) {
