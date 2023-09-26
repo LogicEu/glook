@@ -92,14 +92,6 @@ static const char glook_shader_string_quad[] = GLOOK_GLSL_VERSION
 "    gl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);\n"
 "}\n";
 
-static const char glook_shader_string_template[] = 
-"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
-"{\n"
-"    vec2 uv = fragCoord / iResolution.xy;\n"
-"    vec3 col = vec3(uv.x, uv.y, (cos(iTime) + 1.0) * 0.5);\n"
-"    fragColor = vec4(col, 1.0);\n"
-"}\n";
-
 static const char glook_shader_string_pass[] = GLOOK_GLSL_VERSION 
 "out vec4 _glookFragColor;\n\n"
 
@@ -108,6 +100,22 @@ static const char glook_shader_string_pass[] = GLOOK_GLSL_VERSION
 "void main(void)\n"
 "{\n"
 "    _glookFragColor = texelFetch(iChannel0, ivec2(gl_FragCoord.xy), 0);\n"
+"}\n";
+
+static const char glook_shader_string_template[] = 
+"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+"{\n"
+"    vec2 uv = fragCoord / iResolution.xy;\n"
+"    vec3 col = vec3(uv.x, uv.y, (cos(iTime) + 1.0) * 0.5);\n"
+"    fragColor = vec4(col, 1.0);\n"
+"}\n";
+
+static const char glook_shader_string_template_pass[] = 
+"void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+"{\n"
+"    vec2 uv = fragCoord / iResolution.xy;\n"
+"    vec3 col = texture(iChannel0, uv).xyz;\n"
+"    fragColor = vec4(col, 1.0);\n"
 "}\n";
 
 struct texture {
@@ -1178,7 +1186,7 @@ int main(int argc, char** argv)
                 glook_file_write("template.glsl", glook_shader_string_template);
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "pass")) {
-                glook_file_write("pass.glsl", glook_shader_string_pass);
+                glook_file_write("pass.glsl", glook_shader_string_template_pass);
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "chain")) {
                 ++glook.opts.chain;
