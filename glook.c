@@ -53,6 +53,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define GLOOK_KEYBOARD_COUNT 1024
 #define GLOOK_COMMON_LINE_COUNT 24
 
+#define GLOOK_MODE_BUILD 0x0
+#define GLOOK_MODE_CHAIN 0x1
+#define GLOOK_MODE_DIRECT 0xF
+
 #define COLRED  "\033[31m"
 #define COLNRM  "\033[0m"
 #define COLBLD  "\033[1m"
@@ -175,7 +179,7 @@ static struct glook {
     struct glook_opts {
         unsigned int dperf;
         unsigned int limit;
-        unsigned int chain;
+        unsigned int mode;
     } opts;
     GLFWwindow* window;
     unsigned int width, height, vshader;
@@ -722,7 +726,7 @@ static int glook_input_parse(char* fpath, char** path, char* inputs)
 static int glook_shader_input_connect(
     struct shader* shader, const int index, const char* inputs, int inputcount)
 {
-    int i, self = 0;
+    int i = 1, self = 0;
     struct pipeline* pipeline = shader->pipeline;
     if (inputcount) {
         for (i = 0; i < inputcount; ++i) {
@@ -730,9 +734,12 @@ static int glook_shader_input_connect(
             shader->inputs[i] = glook_shader_input(pipeline->shaders + n);
             self += (index == n);
         }
-    } else if (glook.opts.chain && index) {
-        i = 1;
+    } else if (glook.opts.mode == GLOOK_MODE_CHAIN && index) {
         shader->inputs[0] = glook_shader_input(pipeline->shaders + index - 1);
+    } else if (glook.opts.mode >= GLOOK_MODE_DIRECT) {
+        int n = glook.opts.mode - GLOOK_MODE_DIRECT;
+        self = (n == index);
+        shader->inputs[0] = glook_shader_input(pipeline->shaders + n); 
     } else {
         for (i = 0; i < index; ++i) {
             shader->inputs[i] = glook_shader_input(pipeline->shaders + i);
@@ -1099,7 +1106,7 @@ static void glook_run(void)
             break;
         }
         if (glook_key_pressed(GLFW_KEY_R)) {
-            ++reload; 
+            ++reload;
         }
         if (glook_key_pressed(GLFW_KEY_T)) {
             tzero = t;
@@ -1165,6 +1172,7 @@ static void glook_usage(void)
     );
 
     fprintf(stdout,
+        "-[0-9]\t\t: set input to all shaders to specified index\n"
         "-chain\t\t: set structure of shader pipeline to link as a single chain\n"
         "-template\t: write template shader 'template.glsl' at current directory\n"
         "-pass\t\t: write simple pass shader 'pass.glsl' taking input from iChannel0\n"
@@ -1189,7 +1197,9 @@ int main(int argc, char** argv)
                 glook_file_write("pass.glsl", glook_shader_string_template_pass);
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "chain")) {
-                ++glook.opts.chain;
+                glook.opts.mode = GLOOK_MODE_CHAIN;
+            } else if (argv[i][1] >= '0' && argv[i][1] <= '9' && !argv[i][2]) {
+                glook.opts.mode = GLOOK_MODE_DIRECT + argv[i][1] - '0';
             } else if (argv[i][1] == 'w' && !argv[i][2]) {
                 p = &width;
             } else if (argv[i][1] == 'h' && !argv[i][2]) {
