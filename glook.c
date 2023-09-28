@@ -32,13 +32,16 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <ctype.h>
 #include <time.h>
 
+#define GLOOK_GLSL_PRECISION \
+    "precision highp float;\nprecision highp int;\nprecision highp sampler2D;\n\n"
+
 #ifndef __APPLE__
     #define GLOOK_SCALE 1
-    #define GLOOK_GLSL_VERSION "#version 300 es\nprecision mediump float;\n\n"
+    #define GLOOK_GLSL_VERSION "#version 300 es\n\n" GLOOK_GLSL_PRECISION
     #include <GL/glew.h>
 #else
     #define GLOOK_SCALE 2
-    #define GLOOK_GLSL_VERSION "#version 330 core\n\n"
+    #define GLOOK_GLSL_VERSION "#version 330 core\n\n" GLOOK_GLSL_PRECISION
     #define GL_SILENCE_DEPRECATION
     #define GLFW_INCLUDE_GLCOREARB
 #endif
@@ -84,8 +87,9 @@ static const char glook_shader_body[] = GLOOK_GLSL_VERSION
 
 "void main(void)\n"
 "{\n"
-"    mainImage(_glookFragColor, gl_FragCoord.xy);\n"
-"    _glookFragColor.w = 1.0;\n"
+"    vec4 col = vec4(0.0);\n"
+"    mainImage(col, gl_FragCoord.xy);\n"
+"    _glookFragColor = col;\n"
 "}\n\n";
 
 static const char glook_shader_string_quad[] = GLOOK_GLSL_VERSION
@@ -484,24 +488,21 @@ static struct ulocator glook_shader_ulocator_create(const unsigned int id)
 static struct texture glook_texture_framebuffer(void)
 {
     struct texture texture;
-    glGenTextures(1, &texture.id);
-    glfwGetFramebufferSize(glook.window, &texture.width, &texture.height);
-
-    glBindTexture(GL_TEXTURE_2D, texture.id);
-    glTexImage2D(
-        GL_TEXTURE_2D, 0, GL_RGBA, texture.width, texture.height,
-        0, GL_RGBA, GL_UNSIGNED_BYTE, NULL
-    );
-
-    /*
-    unsigned int lod = 0, w = glook.width;
+    /*unsigned int lod = 0, w = glook.width;
     while (w >>= 1) {
         ++lod;
-    }
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAX_LEVEL, lod);
-    */
+    }*/
 
+    glGenTextures(1, &texture.id);
+    glfwGetFramebufferSize(glook.window, &texture.width, &texture.height);
+    glBindTexture(GL_TEXTURE_2D, texture.id);
+    glTexImage2D(
+        GL_TEXTURE_2D, 0, GL_RGBA32F, texture.width, texture.height,
+        0, GL_RGBA, GL_FLOAT, NULL
+    );
+    
+    /*glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, lod);*/
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -509,30 +510,17 @@ static struct texture glook_texture_framebuffer(void)
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id, 0
     );
-    /*glGenerateMipmap(GL_TEXTURE_2D);*/
+    glGenerateMipmap(GL_TEXTURE_2D);
 
     return texture;
 }
 
 static struct framebuffer glook_framebuffer_create(void)
 {
-    unsigned int rbo;
     struct framebuffer fb;
     glGenFramebuffers(1, &fb.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
-
-    fb.texture = glook_texture_framebuffer();
-    glGenRenderbuffers(1, &rbo);
-    glBindRenderbuffer(GL_RENDERBUFFER, rbo); 
-    glRenderbufferStorage(
-        GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fb.texture.width, fb.texture.height
-    );
-
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    glFramebufferRenderbuffer(
-        GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo
-    );
-
+    fb.texture = glook_texture_framebuffer();    
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         glook_error_log("failed to create framebuffer render object\n");
         fb.fbo = 0;
@@ -613,17 +601,20 @@ static struct texture* glook_shader_input_texture(struct input input)
 static void glook_shader_render_self(struct shader* shader)
 {
     /*int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;*/
+    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
-    glUseProgram(glook.shaderpass.id);
+    
     glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(glook.shaderpass.id);
     /*glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);*/
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     /*
     glActiveTexture(GL_TEXTURE0);
@@ -664,8 +655,8 @@ static void glook_shader_render(
         );
     }
 
-    glUseProgram(shader->id);
     glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(shader->id);
     glUniform1f(shader->locator.iTime, t);
     glUniform1f(shader->locator.iTimeDelta, dt);
     glUniform1i(shader->locator.iFrame, frame);
@@ -673,6 +664,12 @@ static void glook_shader_render(
     glUniform4f(shader->locator.iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+ 
+    for (i = 0; i < shader->inputcount; ++i) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     /*
     glActiveTexture(GL_TEXTURE0);
@@ -1029,9 +1026,13 @@ static int glook_window_create(
     }
 #endif
 
-    glEnable(GL_MULTISAMPLE);
+    glClampColor(GL_CLAMP_READ_COLOR, GL_FALSE);
+    //glClampColor(GL_CLAMP_VERTEX_COLOR, GL_FALSE);
+    //glClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
+
+    /*glEnable(GL_MULTISAMPLE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);*/
     glook_buffer_quad_create();
     
     glook.window = window;
@@ -1174,8 +1175,8 @@ static void glook_usage(void)
     fprintf(stdout,
         "-[0-9]\t\t: set input to all shaders to specified index\n"
         "-chain\t\t: set structure of shader pipeline to link as a single chain\n"
-        "-template\t: write template shader 'template.glsl' at current directory\n"
-        "-pass\t\t: write simple pass shader 'pass.glsl' taking input from iChannel0\n"
+        "-template\t: write template shader 'template.frag' at current directory\n"
+        "-pass\t\t: write simple pass shader 'pass.frag' taking input from iChannel0\n"
         "-help\t\t: print this help message\n"
     );
 }
@@ -1191,10 +1192,10 @@ int main(int argc, char** argv)
                 glook_usage();
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "template")) {
-                glook_file_write("template.glsl", glook_shader_string_template);
+                glook_file_write("template.frag", glook_shader_string_template);
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "pass")) {
-                glook_file_write("pass.glsl", glook_shader_string_template_pass);
+                glook_file_write("pass.frag", glook_shader_string_template_pass);
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "chain")) {
                 glook.opts.mode = GLOOK_MODE_CHAIN;
