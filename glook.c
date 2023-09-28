@@ -32,16 +32,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <ctype.h>
 #include <time.h>
 
-#define GLOOK_GLSL_PRECISION \
-    "precision highp float;\nprecision highp int;\nprecision highp sampler2D;\n\n"
-
 #ifndef __APPLE__
     #define GLOOK_SCALE 1
-    #define GLOOK_GLSL_VERSION "#version 300 es\n\n" GLOOK_GLSL_PRECISION
+    #define GLOOK_GLSL_VERSION "#version 300 es\n\nprecision mediump float;\n\n"
     #include <GL/glew.h>
 #else
     #define GLOOK_SCALE 2
-    #define GLOOK_GLSL_VERSION "#version 330 core\n\n" GLOOK_GLSL_PRECISION
+    #define GLOOK_GLSL_VERSION "#version 330 core\n\n"
     #define GL_SILENCE_DEPRECATION
     #define GLFW_INCLUDE_GLCOREARB
 #endif
@@ -488,11 +485,6 @@ static struct ulocator glook_shader_ulocator_create(const unsigned int id)
 static struct texture glook_texture_framebuffer(void)
 {
     struct texture texture;
-    /*unsigned int lod = 0, w = glook.width;
-    while (w >>= 1) {
-        ++lod;
-    }*/
-
     glGenTextures(1, &texture.id);
     glfwGetFramebufferSize(glook.window, &texture.width, &texture.height);
     glBindTexture(GL_TEXTURE_2D, texture.id);
@@ -501,8 +493,6 @@ static struct texture glook_texture_framebuffer(void)
         0, GL_RGBA, GL_FLOAT, NULL
     );
     
-    /*glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, lod);*/
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -510,8 +500,8 @@ static struct texture glook_texture_framebuffer(void)
     glFramebufferTexture2D(
         GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id, 0
     );
+    
     glGenerateMipmap(GL_TEXTURE_2D);
-
     return texture;
 }
 
@@ -600,28 +590,16 @@ static struct texture* glook_shader_input_texture(struct input input)
 
 static void glook_shader_render_self(struct shader* shader)
 {
-    /*int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;*/
     glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
     
     glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(glook.shaderpass.id);
-    /*glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
-    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);*/
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
-
-    /*
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, glook.shaderpass.framebuffer.texture.id);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    */
 }
 
 static void glook_shader_render(
@@ -671,12 +649,6 @@ static void glook_shader_render(
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
-    /*
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    */
     ++shader->rendered;
 }
 
@@ -1026,13 +998,9 @@ static int glook_window_create(
     }
 #endif
 
-    glClampColor(GL_CLAMP_READ_COLOR, GL_FALSE);
-    //glClampColor(GL_CLAMP_VERTEX_COLOR, GL_FALSE);
-    //glClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
-
-    /*glEnable(GL_MULTISAMPLE);
+    glEnable(GL_MULTISAMPLE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);*/
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glook_buffer_quad_create();
     
     glook.window = window;
