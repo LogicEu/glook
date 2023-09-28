@@ -998,11 +998,7 @@ static int glook_window_create(
     }
 #endif
 
-    glEnable(GL_MULTISAMPLE);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glook_buffer_quad_create();
-    
     glook.window = window;
     glook.vshader = glCreateShader(GL_VERTEX_SHADER);
     glook_shader_compile(glook.vshader, glook_shader_string_quad, NULL, NULL);
