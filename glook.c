@@ -104,7 +104,8 @@ static const char glook_shader_string_pass[] = GLOOK_GLSL_VERSION
 
 "void main(void)\n"
 "{\n"
-"    _glookFragColor = texelFetch(iChannel0, ivec2(gl_FragCoord.xy), 0);\n"
+"    vec3 col = texelFetch(iChannel0, ivec2(gl_FragCoord.xy), 0).rgb;\n"
+"    _glookFragColor = vec4(clamp(col, 0.0, 1.0), 1.0);\n"
 "}\n";
 
 static const char glook_shader_string_template[] = 
@@ -589,24 +590,20 @@ static struct texture* glook_shader_input_texture(struct input input)
 }
 
 static void glook_shader_render_self(struct shader* shader)
-{
-    glBindFramebuffer(GL_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
-    
-    glClear(GL_COLOR_BUFFER_BIT);
-    glUseProgram(glook.shaderpass.id);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+{ 
+    const int w = glook.width * GLOOK_SCALE, h = glook.height * GLOOK_SCALE;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shader->framebuffer.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glook.shaderpass.framebuffer.fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glUseProgram(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 static void glook_shader_render(
     struct shader* shader, int frame, float t, float dt, float fps, float* mouse)
 {
     int i, self = -1;
-    for (i = 0; i < shader->inputcount; ++i) {
+    const int inputcount = shader->inputcount;
+    for (i = 0; i < inputcount; ++i) {
         if (shader->inputs[i].type == GLOOK_FRAMEBUFFER) {
             struct shader* inshader = shader->inputs[i].data;
             if (!inshader->rendered) {
@@ -620,11 +617,8 @@ static void glook_shader_render(
         }
     }
 
-    if (shader != glook_pipeline_head(shader->pipeline)) {
-        glBindFramebuffer(GL_FRAMEBUFFER, shader->framebuffer.fbo);
-    }
-
-    for (i = 0; i < shader->inputcount; ++i) {
+    glBindFramebuffer(GL_FRAMEBUFFER, shader->framebuffer.fbo);
+    for (i = 0; i < inputcount; ++i) {
         struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(
@@ -644,7 +638,7 @@ static void glook_shader_render(
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glUseProgram(0);
  
-    for (i = 0; i < shader->inputcount; ++i) {
+    for (i = 0; i < inputcount; ++i) {
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -695,30 +689,22 @@ static int glook_input_parse(char* fpath, char** path, char* inputs)
 static int glook_shader_input_connect(
     struct shader* shader, const int index, const char* inputs, int inputcount)
 {
-    int i = 1, self = 0;
+    int i = 1;
     struct pipeline* pipeline = shader->pipeline;
     if (inputcount) {
         for (i = 0; i < inputcount; ++i) {
             int n = inputs[i] - '0';
             shader->inputs[i] = glook_shader_input(pipeline->shaders + n);
-            self += (index == n);
         }
     } else if (glook.opts.mode == GLOOK_MODE_CHAIN && index) {
         shader->inputs[0] = glook_shader_input(pipeline->shaders + index - 1);
     } else if (glook.opts.mode >= GLOOK_MODE_DIRECT) {
         int n = glook.opts.mode - GLOOK_MODE_DIRECT;
-        self = (n == index);
         shader->inputs[0] = glook_shader_input(pipeline->shaders + n); 
     } else {
         for (i = 0; i < index; ++i) {
             shader->inputs[i] = glook_shader_input(pipeline->shaders + i);
         }
-    }
-
-    if (self && !glook.shaderpass.id) {
-        glook.shaderpass = glook_shader_load_buffer(
-            glook_shader_string_pass, NULL, NULL
-        );
     }
 
     return i;
@@ -796,7 +782,16 @@ static void glook_shader_pipeline_free(struct pipeline* pipeline)
 static void glook_shader_pipeline_render(
     struct pipeline* pipeline, int frame, float t, float dt, float* mouse)
 {
-    glook_shader_render(glook_pipeline_head(pipeline), frame, t, dt, 1.0 / dt, mouse);
+    struct shader* shader = glook_pipeline_head(pipeline);
+    glook_shader_render(shader, frame, t, dt, 1.0 / dt, mouse);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, shader->framebuffer.texture.id);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(glook.shaderpass.id);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 /* mouse control functions */
@@ -1057,6 +1052,7 @@ static int glook_init(int width, int height, int fullscreen, char* commonpath)
         return EXIT_FAILURE;
     }
 
+    glook.shaderpass = glook_shader_load_buffer(glook_shader_string_pass, NULL, NULL);
     glook.opts.limit = GLOOK_SHADER_COUNT - 1;
     return EXIT_SUCCESS;
 }
