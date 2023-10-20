@@ -94,7 +94,7 @@ static const char glook_shader_string_quad[] = GLOOK_GLSL_VERSION
 
 "void main(void)\n"
 "{\n"
-"    gl_Position = vec4(vertCoord.x, vertCoord.y, 0.0, 1.0);\n"
+"    gl_Position = vec4(vertCoord.xy, 0.0, 1.0);\n"
 "}\n";
 
 static const char glook_shader_string_pass[] = GLOOK_GLSL_VERSION 
@@ -622,8 +622,8 @@ static void glook_shader_render(
         struct texture* texture = glook_shader_input_texture(shader->inputs[i]);
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(
-                GL_TEXTURE_2D,
-                self != i ? texture->id : glook.shaderpass.framebuffer.texture.id
+            GL_TEXTURE_2D,
+            self != i ? texture->id : glook.shaderpass.framebuffer.texture.id
         );
     }
 
@@ -636,13 +636,6 @@ static void glook_shader_render(
     glUniform4f(shader->locator.iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glUseProgram(0);
- 
-    for (i = 0; i < inputcount; ++i) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-
     ++shader->rendered;
 }
 
