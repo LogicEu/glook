@@ -52,6 +52,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define GLOOK_INPUT_COUNT 4
 #define GLOOK_KEYBOARD_COUNT 1024
 #define GLOOK_COMMON_LINE_COUNT 24
+#define GLOOK_AUTORELOAD_COUNT 32
 
 #define GLOOK_MODE_BUILD 0x0
 #define GLOOK_MODE_CHAIN 0x1
@@ -182,6 +183,7 @@ static struct glook {
         unsigned int dperf;
         unsigned int limit;
         unsigned int mode;
+        unsigned int autoreload;
     } opts;
     GLFWwindow* window;
     unsigned int width, height, vshader;
@@ -331,9 +333,9 @@ static char* glook_file_read(const char* fpath, const size_t offset)
 
 static char* glook_file_shader_read(const char* fpath, const struct common* common)
 {
-    char* source = glook_file_read(fpath, common->length - 1);
+    char* source = glook_file_read(fpath, common->length);
     if (source) {   
-        memcpy(source, common->source, common->length - 1);
+        memcpy(source, common->source, common->length);
     }
     
     return source;
@@ -348,7 +350,7 @@ static void glook_common_measure(const char* source, size_t* length, size_t* lin
         j += source[i] == '\n';
     }
     *length = i;
-    *linecount = j + !j * !!i;
+    *linecount = j + (i && source[i - 1] != '\n');
 }
 
 static struct common glook_common_create(char* path)
@@ -1050,11 +1052,25 @@ static int glook_init(int width, int height, int fullscreen, char* commonpath)
     return EXIT_SUCCESS;
 }
 
+static int glook_file_modstr(char* modstr, const char* fpath)
+{
+    struct stat st;
+    if (stat(fpath, &st)) {
+        glook_error_log("could not find file: '%s'\n", fpath);
+        return EXIT_FAILURE;
+    }
+
+    strcpy(modstr, ctime(&st.st_mtime));
+    return EXIT_SUCCESS;
+}
+
 static void glook_run(void)
 {
+    char modstr[0xff], mod[0xff];
     unsigned int i, frame = 0, reload = 0, pause = 0;
     float mouse[4], t = 0.0F, dt = 1.0F, T = 0.0F, tzero = 0.0F, pt = 0.0F;
-    
+
+    glook_file_modstr(modstr, glook.pipeline.shaders[glook.pipeline.count - 1].fpath);
     while (glook_clear()) {
         if (glook_key_pressed(GLFW_KEY_ESCAPE)) {
             break;
@@ -1072,6 +1088,19 @@ static void glook_run(void)
         if (glook.pipeline.count > 1 &&
             glook_key_down(GLFW_KEY_LEFT_SHIFT) && glook_key_pressed(GLFW_KEY_P)) {
             glook_shader_free(glook.pipeline.shaders + --glook.pipeline.count);
+        }
+
+        if (glook.opts.autoreload) {
+            glook.opts.autoreload++;
+            if (glook.opts.autoreload >= GLOOK_AUTORELOAD_COUNT) {
+                glook.opts.autoreload = 1;
+                if (!glook_file_modstr(
+                    mod, glook.pipeline.shaders[glook.pipeline.count - 1].fpath) &&
+                    strcmp(modstr, mod)) {
+                    strcpy(modstr, mod);
+                    ++reload;
+                }
+            }
         }
 
         for (i = 0; i < GLOOK_SHADER_COUNT; ++i) {
@@ -1126,6 +1155,7 @@ static void glook_usage(void)
     );
 
     fprintf(stdout,
+        "-m\t\t: constantly search and reload when modified shaders are found\n"
         "-[0-9]\t\t: set input to all shaders to specified index\n"
         "-chain\t\t: set structure of shader pipeline to link as a single chain\n"
         "-template\t: write template shader 'template.frag' at current directory\n"
@@ -1164,6 +1194,8 @@ int main(int argc, char** argv)
                 ++glook.opts.dperf;
             } else if (argv[i][1] == 'c' && !argv[i][2]) {
                 ++c;
+            } else if (argv[i][1] == 'm' && !argv[i][2]) {
+                ++glook.opts.autoreload;
             } else {
                 glook_error_log("unknown argument: '%s'\n", argv[i]);
             }
