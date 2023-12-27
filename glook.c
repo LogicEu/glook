@@ -1171,7 +1171,8 @@ static void glook_usage(void)
     );
 
     glook_log(
-        "controls:\nSpace\t\t: pause time and rendering for all shaders\n"
+        "controls:\nEscape\t\t: exit the program\n"
+        "Space\t\t: pause time and rendering for all shaders\n"
         "Backspace\t: remove shader at the top of the pipeline stack\n"
         "[0-9]\t\t: visualize from the shader at the selected index\n"
         "R\t\t: reload all shaders in the pipeline\n"
