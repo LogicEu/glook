@@ -1085,8 +1085,14 @@ static void glook_run(void)
         if (glook_key_pressed(GLFW_KEY_SPACE)) {
             pause = !pause;
         }
-        if (glook.pipeline.count > 1 &&
-            glook_key_down(GLFW_KEY_LEFT_SHIFT) && glook_key_pressed(GLFW_KEY_P)) {
+        if (glook_key_pressed(GLFW_KEY_I)) {
+            glook_log(
+                "\niFrame: %u\niTime: %f\niResolution: %u x %u\niMouse: %.2f x %.2f\n",
+                frame, t, glook.width * GLOOK_SCALE, glook.height * GLOOK_SCALE,
+                mouse[0], mouse[1]
+            );
+        }
+        if (glook.pipeline.count > 1 && glook_key_pressed(GLFW_KEY_BACKSPACE)) {
             glook_shader_free(glook.pipeline.shaders + --glook.pipeline.count);
         }
 
@@ -1124,7 +1130,8 @@ static void glook_run(void)
 
         if (glook.opts.dperf && !(frame % 2)) {
             glook_log("%d x %d\tfps: %f\tframe: %lu\ttime: %f\r",
-                glook.width, glook.height, 1.0F / dt, frame, t
+                glook.width * GLOOK_SCALE, glook.height * GLOOK_SCALE,
+                1.0F / dt, frame, t
             );
         }
 
@@ -1146,7 +1153,7 @@ static void glook_run(void)
 static void glook_usage(void)
 {
     glook_log(
-        "\n<file>\t\t: read, compile and visualize <file> as GLSL shader\n"
+        "options:\n<file>\t\t: read, compile and visualize <file> as GLSL shader\n"
         "-c <file>\t: read file as common header file for all shaders in pipeline\n"
         "-w <uint>\t: set the width of the rendering window to <uint> pixels\n"
         "-h <uint>\t: set the height of the rendering window to <uint> pixels\n"
@@ -1156,11 +1163,20 @@ static void glook_usage(void)
 
     fprintf(stdout,
         "-m\t\t: constantly search and reload when modified shaders are found\n"
-        "-[0-9]\t\t: set input to all shaders to specified index\n"
+        "-[0-9]\t\t: set input of all shaders to specified index\n"
         "-chain\t\t: set structure of shader pipeline to link as a single chain\n"
         "-template\t: write template shader 'template.frag' at current directory\n"
-        "-pass\t\t: write simple pass shader 'pass.frag' taking input from iChannel0\n"
-        "-help\t\t: print this help message\n"
+        "-pass\t\t: write pass shader 'pass.frag' at current directory\n"
+        "-help, --help\t: print this help message\n\n"
+    );
+
+    glook_log(
+        "controls:\nSpace\t\t: pause time and rendering for all shaders\n"
+        "Backspace\t: remove shader at the top of the pipeline stack\n"
+        "[0-9]\t\t: visualize from the shader at the selected index\n"
+        "R\t\t: reload all shaders in the pipeline\n"
+        "T\t\t: set time and frame global counters to zero\n"
+        "I\t\t: print information about the values of the global uniforms\n\n"
     );
 }
 
@@ -1171,7 +1187,7 @@ int main(int argc, char** argv)
     for (i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
             int c = 0, *p = NULL;
-            if (!strcmp(argv[i] + 1, "help")) {
+            if (!strcmp(argv[i] + 1, "help") || !strcmp(argv[i] + 1, "-help")) {
                 glook_usage();
                 return EXIT_SUCCESS;
             } else if (!strcmp(argv[i] + 1, "template")) {
